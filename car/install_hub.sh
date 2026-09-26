@@ -25,7 +25,7 @@ fi
 
 # 4. (Re)create the hub container.
 docker rm -f rc-hub >/dev/null 2>&1 || true
-docker run -d --name rc-hub --init --restart unless-stopped \
+docker run -d --name rc-hub --init --restart unless-stopped --stop-timeout 25 \
   --privileged --network host \
   -v /dev:/dev -v "$REPO":/opt/rc \
   --tmpfs /tmp:size=64m \

@@ -13,8 +13,10 @@ button { font: inherit; color: inherit; background: #222832; border: 1px solid v
 button:disabled { opacity: .4; cursor: default; }
 .hidden { display: none !important; }
 
-header { display: flex; align-items: center; gap: 10px; padding: 10px 16px;
-  border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+/* Header and e-stop stay on screen while scrolling down to the joysticks. */
+.sticky-top { position: sticky; top: 0; z-index: 5; background: var(--bg); padding-bottom: 8px;
+  border-bottom: 1px solid var(--line); }
+header { display: flex; align-items: center; gap: 10px; padding: 10px 16px; }
 header .grow { flex: 1; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex: none; }
 .dot.on { background: var(--ok); }
@@ -25,7 +27,7 @@ header .grow { flex: 1; }
 .stat { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
 .stat.low { color: var(--bad); }
 
-.estop { display: block; width: calc(100% - 32px); margin: 10px 16px 0; padding: 14px;
+.estop { display: block; width: calc(100% - 32px); margin: 0 16px; padding: 12px;
   font-size: 20px; font-weight: 700; letter-spacing: 2px; color: #fff;
   background: var(--bad); border: 0; border-radius: var(--radius); box-shadow: 0 2px 0 #a62f2f; }
 .estop:active { transform: translateY(1px); box-shadow: none; }
