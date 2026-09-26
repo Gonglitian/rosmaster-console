@@ -18,6 +18,7 @@ OFF, STARTING, ON, ERROR, STOPPING = 'off', 'starting', 'on', 'error', 'stopping
 OUR_DRIVER_NODE = 'hf_driver'
 LIDAR_OK = 'current scan mode'
 LIDAR_FAIL = ('Can not start scan', 'Error, operation time out', 'Error, cannot bind')
+ODOM_MISSING = '可以开车，但没收到 EKF 的 /odom，面板上看不到实测速度'
 
 
 class Sensor(object):
@@ -119,6 +120,10 @@ class SensorManager(object):
             return
         proc = self._launch('base')
         self._set(s, STARTING, '启动驱动、IMU 滤波和 EKF')
+        # Ready = the driver is alive (it publishes /voltage from the STM32 at
+        # 10 Hz, and it is the node that turns /hub/cmd_vel into wheel motion).
+        # /odom comes from the EKF further down the chain; missing /odom is a
+        # warning, never a reason to kill a driver that can drive the car.
         deadline = time.time() + config.BASE_START_TIMEOUT
         while time.time() < deadline:
             await asyncio.sleep(0.5)
@@ -126,12 +131,18 @@ class SensorManager(object):
                 self._set(s, ERROR, '进程退出：' + ' | '.join(proc.tail(3)))
                 self.procs.pop('base', None)
                 return
-            if self._fresh('odom', proc.started_at) and self._fresh('voltage', proc.started_at):
-                self._set(s, ON)
-                return
-        await self._blocking(proc.stop)
-        self.procs.pop('base', None)
-        self._set(s, ERROR, '%.0f 秒内没收到 /odom 和 /voltage' % config.BASE_START_TIMEOUT)
+            if self._fresh('voltage', proc.started_at):
+                break
+        else:
+            await self._blocking(proc.stop)
+            self.procs.pop('base', None)
+            self._set(s, ERROR, '%.0f 秒内没收到驱动的 /voltage，底盘驱动没起来'
+                      % config.BASE_START_TIMEOUT)
+            return
+        odom_deadline = time.time() + 5.0
+        while time.time() < odom_deadline and not self._fresh('odom', proc.started_at):
+            await asyncio.sleep(0.25)
+        self._set(s, ON, '' if self._fresh('odom', proc.started_at) else ODOM_MISSING)
 
     async def _start_lidar(self, s):
         last_lines = []
@@ -196,7 +207,15 @@ class SensorManager(object):
     # ---- health (called every second) ----------------------------------
     def check_health(self):
         now = time.time()
-        for name, topic in (('base', 'odom'), ('lidar', 'scan')):
+        base = self.sensors['base']
+        if base.state == ON:
+            # The driver's /voltage decides health; /odom only toggles a warning.
+            odom_ok = now - self.bridge.rates['odom'].last < config.STALE_TOPIC_TIMEOUT
+            if odom_ok and base.message == ODOM_MISSING:
+                self._set(base, ON, '')
+            elif not odom_ok and base.message == '':
+                self._set(base, ON, ODOM_MISSING)
+        for name, topic in (('base', 'voltage'), ('lidar', 'scan')):
             s = self.sensors[name]
             if s.state != ON:
                 continue

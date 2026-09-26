@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast DDS profile for every ROS process in the rc-hub container: UDPv4 only,
+  no shared-memory transport.
+
+  Why: with Fast DDS's default shared-memory transport, a node that dies by
+  SIGKILL leaves state in /dev/shm/fastrtps_*. On 2026-09-26, after the chassis
+  launch was stopped and restarted within a few seconds, the long-running hub
+  never again received /odom from the new EKF, while a freshly started
+  subscriber did (10 Hz). UDP over loopback keeps no shared state between
+  processes, so a killed node cannot poison the hub's reception.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_only</transport_id>
+      <type>UDPv4</type>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="rc_hub_udp_only" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>udp_only</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

@@ -14,7 +14,13 @@ export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 export ROBOT_TYPE=x3 RPLIDAR_TYPE=a1
 export ROS_LOG_DIR=/tmp/roslog                  # tmpfs: keep ROS logs off the SD card
 export PYTHONUNBUFFERED=1
+# UDP only, no shared-memory transport: a SIGKILLed node must not be able to
+# break the hub's reception (see car/fastdds_udp.xml).
+export FASTRTPS_DEFAULT_PROFILES_FILE=/opt/rc/car/fastdds_udp.xml
 cd /opt/rc
+# Stale Fast DDS shared-memory files from earlier runs (this container owns the
+# only ROS processes on the car; the old x3 container must be stopped).
+rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_* 2>/dev/null
 
 cleanup_children() {
   if pgrep -f 'ros2 launch' >/dev/null; then

@@ -71,7 +71,7 @@ function renderState() {
     let text = SENSOR_TEXT[s.state] || s.state;
     if (s.state === 'starting' && s.attempt > 1) text += '·' + s.attempt;
     btn.querySelector('span').textContent = text;
-    if (s.message && (s.state === 'error' || s.state === 'starting')) {
+    if (s.message && (s.state === 'error' || s.state === 'starting' || s.state === 'on')) {
       msg += btn.querySelector('b').textContent + '：' + s.message + '  ';
       bad = bad || s.state === 'error';
     }

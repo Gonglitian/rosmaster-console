@@ -11,6 +11,16 @@ import time
 log = logging.getLogger('hub.procs')
 
 
+def _group_alive(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 class ChildProcess(object):
     """Runs argv; each stdout line is kept in a ring buffer and passed to
     on_line(line) on the asyncio loop."""
@@ -68,11 +78,18 @@ class ChildProcess(object):
                 break
             except subprocess.TimeoutExpired:
                 log.warning('[%s] still alive after %s', self.name, sig.name)
-        # Leftover members of the group (a node that ignored SIGINT) get SIGKILL.
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        # `ros2 launch` can exit before its nodes finish shutting down. Give the
+        # rest of the group time to exit on its own: a node killed mid-shutdown
+        # leaves stale DDS state behind. Only then SIGKILL what is left.
+        deadline = time.time() + 5.0
+        while time.time() < deadline and _group_alive(pgid):
+            time.sleep(0.1)
+        if _group_alive(pgid):
+            log.warning('[%s] group members still alive after 5 s, SIGKILL', self.name)
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         log.info('[%s] stopped (rc=%s)', self.name, self.returncode)
 
     def tail(self, n=20):
