@@ -186,7 +186,8 @@ docker exec -it rc-hub bash -c 'source /opt/ros/foxy/setup.bash; export ROS_DOMA
 cd ~/rosmaster-console
 git log --oneline | head -5              # the code history (local repository only)
 bash scripts/deploy_car.sh               # copy this checkout to the car and restart the hub
-git checkout <older commit> -- . && bash scripts/deploy_car.sh   # roll back (then `git checkout HEAD -- .` to return)
+# roll back: deploy an older commit from a temporary copy (your checkout stays untouched)
+rm -rf /tmp/rc_old && mkdir /tmp/rc_old && git archive <older commit> | tar -x -C /tmp/rc_old && bash /tmp/rc_old/scripts/deploy_car.sh
 curl -s http://rosmaster.local:8080/ | grep -o '<title>.*</title>'   # expect <title>RosMaster Console</title>
 ```
 
