@@ -8,8 +8,10 @@ Panel protocol (JSON text frames on /ws; full spec in docs/protocol.md):
 Times from the hub ('stamp', 's', 'server_time') are the car's wall clock.
 """
 import asyncio
+import collections
 import json
 import logging
+import statistics
 import time
 
 import tornado.iostream
@@ -17,7 +19,7 @@ import tornado.web
 import tornado.websocket
 
 from . import config, sysinfo
-from .arbiter import Arbiter
+from .arbiter import Arbiter, POLICY
 from .battery import BatteryEstimator, NMC_TABLE, WARN_V, CRITICAL_V, STOP_V, FLOOR_V, STORAGE_V
 from .battery_reader import BatteryReader
 from .camera import Camera
@@ -25,7 +27,8 @@ from .sensors import SensorManager
 from .wifi import WifiManager
 
 log = logging.getLogger('hub')
-VERSION = '0.1.0'
+VERSION = '0.2.0'
+PROTOCOL = 1
 
 
 class Hub(object):
@@ -33,6 +36,7 @@ class Hub(object):
         self.loop = loop
         self.started = time.time()
         self.clients = {}
+        self.workers = {}          # client id -> policy worker record (see _worker_hello)
         self._next_client = 1
         self.arbiter = Arbiter(config.MAX_LINEAR, config.MAX_ANGULAR, config.MAX_LINEAR_ACCEL,
                                config.MAX_ANGULAR_ACCEL, config.SOURCE_TIMEOUT)
@@ -57,6 +61,15 @@ class Hub(object):
 
     def remove_client(self, cid):
         self.clients.pop(cid, None)
+        w = self.workers.pop(cid, None)
+        if w is not None:
+            if self.arbiter.active_policy == w['id']:
+                self.arbiter.activate_policy(None)
+                self._publish(*self.arbiter.tick())
+                log.warning('active policy %s (%s) disconnected: car stopped', w['id'], w['name'])
+            else:
+                log.info('policy worker %s (%s) disconnected', w['id'], w['name'])
+            self.push_state()
 
     def send(self, sock, msg):
         try:
@@ -75,7 +88,8 @@ class Hub(object):
                 pass
 
     def hello(self, cid):
-        return {'t': 'hello', 'version': VERSION, 'client_id': cid, 'server_time': time.time(),
+        return {'t': 'hello', 'version': VERSION, 'protocol': PROTOCOL, 'client_id': cid,
+                'server_time': time.time(),
                 'config': {'laser_x': config.LASER_X, 'laser_yaw': config.LASER_YAW,
                            'max_linear': config.MAX_LINEAR, 'max_angular': config.MAX_ANGULAR,
                            'control_hz': config.CONTROL_HZ,
@@ -116,8 +130,102 @@ class Hub(object):
             self._beep()
         elif kind == 'ping':
             self.send(sock, {'t': 'pong', 'c': msg.get('c'), 's': time.time()})
+        elif kind == 'worker_hello':
+            self._worker_hello(cid, sock, msg)
+        elif kind == 'policy_cmd':
+            self._policy_cmd(cid, sock, msg)
+        elif kind == 'policy_debug':
+            w = self.workers.get(cid)
+            if w is not None:
+                self.broadcast({'t': 'policy_debug', 'worker_id': w['id'], 'stamp': round(time.time(), 3),
+                                'markers': list(msg.get('markers') or [])[:200],
+                                'text': str(msg.get('text') or '')[:300]})
+        elif kind == 'activate_policy':
+            self._activate(msg.get('worker_id'), cid, sock)
+        elif kind == 'deactivate_policy':
+            self._deactivate('client %s' % cid)
         else:
             self.send(sock, {'t': 'error', 'msg': 'unknown message type %r' % kind})
+
+    # ---- policy workers (protocol in docs/API.md) ------------------------
+    def _worker_hello(self, cid, sock, msg):
+        wid = 'w%d' % cid
+        self.workers[cid] = {
+            'id': wid, 'sock': sock, 'since': time.time(), 'last_cmd': None,
+            'name': str(msg.get('name') or 'policy')[:40],
+            'host': str(msg.get('host') or sock.request.remote_ip)[:60],
+            'cmd_times': collections.deque(maxlen=50), 'latency': collections.deque(maxlen=50)}
+        log.info('policy worker %s (%s on %s) connected', wid, self.workers[cid]['name'],
+                 self.workers[cid]['host'])
+        self.send(sock, {'t': 'worker_welcome', 'worker_id': wid, 'protocol': PROTOCOL,
+                         'active': self.arbiter.active_policy == wid, 'config': self.hello(cid)['config']})
+        self.push_state()
+
+    def _policy_cmd(self, cid, sock, msg):
+        w = self.workers.get(cid)
+        if w is None:
+            self.send(sock, {'t': 'error', 'msg': 'send worker_hello before policy_cmd'})
+            return
+        a, now = self.arbiter, time.time()
+        w['cmd_times'].append(now)
+        w['last_cmd'] = now
+        obs = msg.get('obs_stamp')
+        if isinstance(obs, (int, float)) and 0 <= now - obs < 10:
+            w['latency'].append((now - obs) * 1000.0)   # observation -> command, car clock
+        accepted = a.set_policy(w['id'], msg.get('vx', 0), msg.get('vy', 0), msg.get('wz', 0))
+        driving = accepted and a.mode == POLICY and not a.estop
+        if driving:
+            self._publish(*a.tick())
+        self.send(sock, {'t': 'policy_ack', 'seq': msg.get('seq'), 'accepted': accepted,
+                         'driving': driving, 'mode': a.mode, 'estop': a.estop})
+
+    def _worker_by_id(self, wid):
+        for w in self.workers.values():
+            if w['id'] == wid:
+                return w
+        return None
+
+    def _activate(self, wid, by, sock):
+        a = self.arbiter
+        w = self._worker_by_id(wid)
+        if w is None:
+            self.send(sock, {'t': 'error', 'msg': 'no connected policy worker %r' % wid})
+            return
+        if a.estop:
+            self.send(sock, {'t': 'error', 'msg': 'release the e-stop first'})
+            return
+        old = self._worker_by_id(a.active_policy)
+        a.activate_policy(wid)
+        a.hand_back()                  # mode -> POLICY
+        self._publish(*a.tick())
+        log.warning('policy %s (%s) given control by client %s', wid, w['name'], by)
+        if old is not None and old is not w:
+            self.send(old['sock'], {'t': 'policy_active', 'active': False})
+        self.send(w['sock'], {'t': 'policy_active', 'active': True})
+        self.push_state()
+
+    def _deactivate(self, by):
+        a = self.arbiter
+        old = self._worker_by_id(a.active_policy)
+        a.activate_policy(None)        # mode POLICY -> IDLE
+        self._publish(*a.tick())
+        if old is not None:
+            log.warning('policy %s (%s) stopped by %s', old['id'], old['name'], by)
+            self.send(old['sock'], {'t': 'policy_active', 'active': False})
+        self.push_state()
+
+    def workers_snapshot(self):
+        now = time.time()
+        out = []
+        for w in self.workers.values():
+            recent = [t for t in w['cmd_times'] if now - t < 2.0]
+            out.append({'id': w['id'], 'name': w['name'], 'host': w['host'],
+                        'connected_s': round(now - w['since']),
+                        'cmd_hz': round(len(recent) / 2.0, 1),
+                        'last_cmd_age': None if w['last_cmd'] is None else round(now - w['last_cmd'], 2),
+                        'latency_ms': round(statistics.median(w['latency'])) if w['latency'] else None,
+                        'active': self.arbiter.active_policy == w['id']})
+        return out
 
     def _beep(self):
         if self.sensors.sensors['base'].state != 'on':
@@ -180,6 +288,8 @@ class Hub(object):
             'battery_v': self.bridge.voltage,
             'battery': dict(self.battery.snapshot(time.time()), source=self.voltage_source),
             'clients': len(self.clients),
+            'panels': len(self.clients) - len(self.workers),
+            'workers': self.workers_snapshot(),
             'uptime': round(time.time() - self.started),
             'sys': self._sys,
         }
@@ -212,7 +322,7 @@ class Hub(object):
     def _check_battery_floor(self):
         if self.battery.below_floor(time.time()) and not self.arbiter.estop:
             log.warning('battery at or below 9.0 V: e-stop')
-            self.arbiter.trigger_estop('电池电压 ≤ 9.0 V，请立即充电')
+            self.arbiter.trigger_estop('battery at or below 9.0 V: charge now')
             self._publish(0.0, 0.0, 0.0)
             self.push_state()
 

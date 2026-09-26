@@ -1,40 +1,40 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#0f1216">
-<title>小车中控台</title>
+<title>RosMaster Console</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="sticky-top">
 <header id="top">
-  <span id="conn" class="dot" title="连接状态"></span>
-  <strong>小车中控台</strong>
+  <span id="conn" class="dot" title="Connection to the car"></span>
+  <strong>RosMaster Console</strong>
   <span id="mode" class="chip">—</span>
   <span class="grow"></span>
-  <span id="battery" class="stat" title="电池电压">🔋 —</span>
-  <span id="rtt" class="stat" title="面板到小车的往返延迟">— ms</span>
+  <span id="battery" class="stat" title="Battery (click for details)">🔋 —</span>
+  <span id="rtt" class="stat" title="Round trip time from this page to the car">— ms</span>
 </header>
-
-<button id="estop" class="estop" type="button">急停</button>
+<button id="estop" class="estop" type="button">E-STOP</button>
 <nav class="tabs" role="tablist">
-  <button type="button" role="tab" data-tab="drive" class="on">控制</button>
-  <button type="button" role="tab" data-tab="battery">电量</button>
-  <button type="button" role="tab" data-tab="net">网络</button>
+  <button type="button" role="tab" data-tab="drive" class="on">Drive</button>
+  <button type="button" role="tab" data-tab="battery">Battery</button>
+  <button type="button" role="tab" data-tab="net">Network</button>
 </nav>
 </div>
+
 <div id="estop-banner" class="banner hidden">
-  <span>已急停<small id="estop-reason"></small></span>
-  <button id="estop-release" type="button">解除急停</button>
+  <span>E-STOP engaged<small id="estop-reason"></small></span>
+  <button id="estop-release" type="button">Release E-STOP</button>
 </div>
-<div id="offline" class="banner warn hidden">与小车的连接断开，正在重连…</div>
+<div id="offline" class="banner warn hidden">Lost connection to the car, reconnecting…</div>
 
 <main id="tab-drive">
   <div class="card view">
-    <canvas id="topdown" aria-label="俯视图：小车在中心，前方朝上"></canvas>
+    <canvas id="topdown" aria-label="Top-down view: car in the centre, forward is up"></canvas>
     <div class="view-tools">
       <button type="button" data-range="2">2 m</button>
       <button type="button" data-range="4" class="on">4 m</button>
@@ -44,33 +44,39 @@
   </div>
 
   <div id="camera-card" class="card camera hidden">
-    <img id="cam" alt="相机画面">
+    <img id="cam" alt="Camera">
   </div>
 
   <div class="sensors-wrap">
     <div class="card sensors">
-      <button type="button" class="sensor" data-sensor="base"><b>底盘</b><span>关</span></button>
-      <button type="button" class="sensor" data-sensor="lidar"><b>雷达</b><span>关</span></button>
-      <button type="button" class="sensor" data-sensor="camera"><b>相机</b><span>关</span></button>
-      <button type="button" id="beep" class="sensor small"><b>鸣笛</b><span>找车</span></button>
+      <button type="button" class="sensor" data-sensor="base"><b>Base</b><span>off</span></button>
+      <button type="button" class="sensor" data-sensor="lidar"><b>Lidar</b><span>off</span></button>
+      <button type="button" class="sensor" data-sensor="camera"><b>Camera</b><span>off</span></button>
+      <button type="button" id="beep" class="sensor small"><b>Beep</b><span>find car</span></button>
     </div>
     <div id="sensor-msg" class="msg"></div>
   </div>
 
+  <div class="card policy">
+    <div class="row between"><h3>Policy</h3><span id="pol-mode" class="hint"></span></div>
+    <ul id="pol-list" class="nw-list"></ul>
+    <div id="pol-debug" class="note"></div>
+  </div>
+
   <div class="card drive">
     <div class="pads">
-      <div class="pad" id="pad-move" aria-label="平移摇杆：上前、下后、左右平移"><div class="knob"></div><span>平移</span></div>
-      <div class="pad pad-rot" id="pad-rot" aria-label="旋转：左拖左转，右拖右转"><div class="knob"></div><span>旋转</span></div>
+      <div class="pad" id="pad-move" aria-label="Move joystick: up forward, down back, left and right sideways"><div class="knob"></div><span>Move</span></div>
+      <div class="pad pad-rot" id="pad-rot" aria-label="Rotate: drag left to turn left, right to turn right"><div class="knob"></div><span>Rotate</span></div>
     </div>
-    <label class="slider"><span>线速度上限 <output id="vmax-out">0.30</output> m/s</span>
+    <label class="slider"><span>Max speed <output id="vmax-out">0.30</output> m/s</span>
       <input id="vmax" type="range" min="0.05" max="0.7" step="0.05" value="0.3"></label>
-    <label class="slider"><span>角速度上限 <output id="wmax-out">0.8</output> rad/s</span>
+    <label class="slider"><span>Max turn rate <output id="wmax-out">0.8</output> rad/s</span>
       <input id="wmax" type="range" min="0.2" max="1.5" step="0.1" value="0.8"></label>
     <div class="row">
-      <button type="button" id="hand-back" disabled>退出手动</button>
-      <span class="hint">电脑键盘：W/S 前后，A/D 平移，Q/E 旋转，Esc 急停</span>
+      <button type="button" id="hand-back" disabled>Exit manual</button>
+      <span class="hint">Keyboard: W/S forward/back, A/D sideways, Q/E rotate, Esc = E-STOP</span>
     </div>
-    <div id="cmd" class="cmd">输出 vx 0.00 · vy 0.00 · ω 0.00</div>
+    <div id="cmd" class="cmd">Output vx 0.00 · vy 0.00 · ω 0.00</div>
   </div>
 </main>
 
@@ -83,8 +89,8 @@
         <div id="bp-sub" class="bat-sub">—</div>
       </div>
     </div>
-    <div class="bat-bar" id="bp-bar" aria-label="电量进度条">
-      <div class="bat-band" id="bp-band" title="长期存放区间 11.1–11.7 V"></div>
+    <div class="bat-bar" id="bp-bar" aria-label="Battery level bar">
+      <div class="bat-band" id="bp-band" title="Long-term storage range 11.1–11.7 V"></div>
       <div class="bat-fill" id="bp-fill"></div>
       <div class="bat-now" id="bp-now"></div>
     </div>
@@ -92,78 +98,77 @@
   </section>
 
   <section class="card bat-times">
-    <h3>放电：多久会到报警线</h3>
+    <h3>Discharging: time to the alarm lines</h3>
     <div id="bp-discharge" class="bat-eta">—</div>
-    <h3>充电：多久能充满</h3>
+    <h3>Charging: time to full</h3>
     <div id="bp-charge" class="bat-eta">—</div>
     <div class="bat-inputs">
-      <label>电池容量 <input id="bp-cap" type="number" min="1000" max="20000" step="100" value="6000"> mAh</label>
-      <label>充电器电流 <input id="bp-cur" type="number" min="0.5" max="10" step="0.1" value="2.0"> A</label>
+      <label>Battery capacity <input id="bp-cap" type="number" min="1000" max="20000" step="100" value="6000"> mAh</label>
+      <label>Charger current <input id="bp-cur" type="number" min="0.5" max="10" step="0.1" value="2.0"> A</label>
     </div>
-    <p class="note">Yahboom 要求充电时关闭扩展板总电源，所以充电过程中小车测不到电压，充满时间只能按上面两个数估算（两个默认值都没核实，可以改）。充电器红灯表示在充，绿灯表示充满，充满后及时拔掉。</p>
+    <p class="note">Yahboom says to switch the main power off while charging, so the car cannot measure the charge. Time to full is estimated from the two numbers above (both defaults are unverified; edit them). The charger LED is red while charging and green when full; unplug it when full.</p>
   </section>
 
   <section class="card bat-details">
-    <h3>详细数据</h3>
+    <h3>Details</h3>
     <dl id="bp-details"></dl>
   </section>
 
   <section class="card bat-chart">
-    <h3>电压曲线</h3>
-    <canvas id="bp-chart" aria-label="电压随时间变化"></canvas>
+    <h3>Voltage history</h3>
+    <canvas id="bp-chart" aria-label="Voltage over time"></canvas>
     <div id="bp-chart-note" class="note"></div>
   </section>
 
-
   <section class="card bat-method">
-    <h3>这些数字怎么来的</h3>
+    <h3>Where these numbers come from</h3>
     <ul>
-      <li>底盘板只报电压（0.1 V 一档），没有电流和百分比。百分比按 3S 三元锂电池的开路电压曲线换算，0% 定在 Yahboom 的 9.6 V 蜂鸣报警点。电池实际是三元锂还是锂聚合物没有确认，看电池标签：INR 是三元锂，ICR 或扁平软包是锂聚合物。</li>
-      <li>开车时电压会被拉低，所以只用静止时的电压（停车 5 秒后开始算，20 秒平滑）；行驶中显示值保持不变。显示值只降不升，除非电压持续升高 30 秒以上（说明充过电或换了电池）。</li>
-      <li>耗电速度取最近 15 分钟静止数据的斜率，至少要积累 5 分钟。开着的传感器越多耗电越快，数字会跟着变。</li>
-      <li>底盘关闭时，hub 会直接从底盘板读电压（电量监测）；开底盘前自动让出串口。</li>
-      <li>提醒线 10.5 V，收车线 10.0 V，报警线 9.6 V；到 9.0 V hub 会自动急停。长期存放请保持在 11.1–11.7 V。</li>
+      <li>The chassis board reports only the pack voltage, in 0.1 V steps: no current, no percentage. The percentage comes from the open-circuit voltage curve of a 3-cell (3S) NMC lithium-ion pack, with 0% at 9.6 V, where Yahboom's board starts beeping. Whether the pack really is NMC (label "INR") or LiPo ("ICR" or a flat pouch) is not confirmed.</li>
+      <li>Voltage drops under load, so only readings taken at rest count: 5 s after the last motion command, smoothed over 20 s. While driving, the displayed value is held. It never goes up unless the voltage stays higher for 30 s or more (the pack was charged or swapped).</li>
+      <li>The drain rate is the slope of the last 15 minutes of resting readings, and needs at least 5 minutes of data. More sensors on means faster drain.</li>
+      <li>With Base off, the hub reads the voltage straight from the chassis board (battery monitor) and hands the serial port back before Base starts.</li>
+      <li>Warning at 10.5 V, finish at 10.0 V, alarm at 9.6 V; at 9.0 V the hub engages E-STOP. Store the pack at 11.1–11.7 V.</li>
     </ul>
   </section>
 </main>
 
 <main id="tab-net" class="net-page hidden">
   <section class="card net-now">
-    <h3>当前网络</h3>
+    <h3>Current network</h3>
     <div id="nw-now" class="nw-now">—</div>
     <div class="row">
-      <button type="button" id="nw-hotspot">切换到小车热点</button>
-      <span class="hint" id="nw-hotspot-hint">小车离开当前网络、开自己的热点 ROSMASTER</span>
+      <button type="button" id="nw-hotspot">Switch to the car's hotspot</button>
+      <span class="hint">The car leaves this network and opens its own hotspot, ROSMASTER</span>
     </div>
   </section>
 
   <section class="card net-scan">
-    <div class="row between"><h3>附近的 Wi-Fi</h3><button type="button" id="nw-scan">扫描</button></div>
+    <div class="row between"><h3>Nearby Wi-Fi</h3><button type="button" id="nw-scan">Scan</button></div>
     <div id="nw-scan-note" class="note"></div>
     <ul id="nw-list" class="nw-list"></ul>
     <details class="nw-manual">
-      <summary>手动输入网络名（隐藏网络，或扫描不到时）</summary>
+      <summary>Type a network name (hidden network, or not in the list)</summary>
       <div class="nw-form">
-        <input id="nw-ssid" placeholder="网络名（SSID）" autocomplete="off" autocapitalize="none">
-        <input id="nw-pass" type="password" placeholder="密码（开放网络留空）" autocomplete="off">
-        <button type="button" id="nw-manual-go">连接</button>
+        <input id="nw-ssid" placeholder="Network name (SSID)" autocomplete="off" autocapitalize="none">
+        <input id="nw-pass" type="password" placeholder="Password (empty for open networks)" autocomplete="off">
+        <button type="button" id="nw-manual-go">Connect</button>
       </div>
     </details>
   </section>
 
   <section class="card net-saved">
-    <h3>已保存的网络</h3>
+    <h3>Saved networks</h3>
     <ul id="nw-saved" class="nw-list"></ul>
-    <p class="note">几个已保存的网络同时在附近时，小车连优先级最高的。小车自己的热点优先级是 50，而且永远算作"可用"，所以附近没有更高优先级的网络时，小车会自动开热点。在这里添加或重新输入过密码的网络，优先级设为 60。</p>
+    <p class="note">When several saved networks are in range, the car joins the one with the highest priority. Its own hotspot has priority 50 and always counts as "in range", so with no higher-priority network around the car opens the hotspot by itself. Networks added or re-keyed here get priority 60.</p>
   </section>
 
   <section class="card net-help">
-    <h3>换地方时怎么连</h3>
+    <h3>Connecting in a new place</h3>
     <ul>
-      <li><b>小车和电脑能连同一个 Wi-Fi：</b>在这页选那个 Wi-Fi、输入密码。小车切过去以后，把电脑也连过去，这页会自动跳到 http://rosmaster.local:8080。</li>
-      <li><b>到了没有已知网络的地方：</b>小车开机后会自动开热点 ROSMASTER（密码 12345678）。电脑连上它，打开 http://192.168.1.11:8080 或 http://rosmaster.local:8080，再到这页配网。</li>
-      <li><b>rosmaster.local 打不开：</b>有些校园网或公司网禁止设备互相发现（mDNS），甚至禁止设备互访。这时看小车 OLED 小屏上的 IP，用 http://那个IP:8080；如果连 IP 也访问不了，说明这个网络禁止设备互访，只能用小车热点。</li>
-      <li>只支持开放网络和 WPA/WPA2 个人网络；UCR-SECURE 这类要账号登录的企业网络不支持。</li>
+      <li><b>The car and your laptop can use the same Wi-Fi:</b> pick that network here and enter its password. When the car has switched, move your laptop to the same network; this page then jumps to http://rosmaster.local:8080 by itself.</li>
+      <li><b>No known network around:</b> after power-on the car opens its hotspot ROSMASTER (password 12345678). Join it, open http://192.168.1.11:8080 or http://rosmaster.local:8080, and set up Wi-Fi on this page.</li>
+      <li><b>rosmaster.local does not open:</b> some campus and office networks block device discovery (mDNS) or even traffic between devices. Use the IP address on the car's small OLED screen: http://that-IP:8080. If the IP does not work either, the network isolates devices: use the car's hotspot.</li>
+      <li>Open networks and WPA/WPA2-Personal only. Networks that need a username (e.g. UCR-SECURE) are not supported.</li>
     </ul>
   </section>
 </main>
@@ -173,7 +178,7 @@
     <h3 id="nw-ov-title">—</h3>
     <div id="nw-ov-body"></div>
     <div id="nw-ov-status" class="note"></div>
-    <div class="row"><button type="button" id="nw-ov-close">关闭</button></div>
+    <div class="row"><button type="button" id="nw-ov-close">Close</button></div>
   </div>
 </div>
 

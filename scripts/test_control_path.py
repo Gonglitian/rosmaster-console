@@ -50,7 +50,7 @@ async def main():
         if m.get('t') == 'state':
             state = m
     if state['sensors']['base']['state'] != 'off':
-        print('ABORT: chassis is %s. Switch 底盘 off first; this test must not move the car.'
+        print('ABORT: chassis is %s. Switch Base off first; this test must not move the car.'
               % state['sensors']['base']['state'])
         return 2
     if state['control']['estop']:

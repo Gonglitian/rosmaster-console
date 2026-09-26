@@ -18,11 +18,11 @@ class WifiParseTest(unittest.TestCase):
         self.assertEqual(_split(' ::69:WPA2:4'), [' ', '', '69', 'WPA2', '4'])
 
     def test_explain(self):
-        self.assertIn('密码', _explain('Error: Connection activation failed: Secrets were required, but not provided'))
-        self.assertIn('找不到', _explain("Error: No network with SSID 'x' found."))
+        self.assertIn('password', _explain('Error: Connection activation failed: Secrets were required, but not provided'))
+        self.assertIn('not found', _explain("Error: No network with SSID 'x' found."))
         self.assertEqual(_explain('Error: Connection activation failed: The Wi-Fi network could not be found\n'
                                   "Hint: use 'journalctl -xe NM_CONNECTION=abc' to get more details."),
-                         '附近找不到这个网络')
+                         'network not found nearby')
 
 
 if __name__ == '__main__':

@@ -125,6 +125,13 @@ footer { padding: 6px 16px 16px; font-size: 12px; color: var(--muted); font-vari
   .bat-hero, .bat-chart, .bat-method { grid-column: 1 / -1; }
 }
 
+/* Policy card */
+.policy { padding: 12px; display: grid; gap: 8px; }
+.policy h3 { margin: 0; font-size: 15px; }
+.policy li.note { list-style: none; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #11151a;
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; overflow-wrap: anywhere; }
+
 /* Network page */
 .net-page { grid-template-columns: minmax(0, 1fr); }
 .net-page .card { padding: 14px 16px; }
@@ -160,7 +167,8 @@ footer { padding: 6px 16px 16px; font-size: 12px; color: var(--muted); font-vari
 /* Desktop: lidar view on the left, controls on the right. Keep last so it wins. */
 @media (min-width: 900px) {
   #tab-drive { grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); align-items: start;
-    grid-template-areas: "view sensors" "view camera" "view drive" "view ."; }
+    grid-template-areas: "view sensors" "view camera" "view policy" "view drive" "view ."; }
   .view { grid-area: view; aspect-ratio: auto; height: calc(100vh - 150px); max-height: none; }
   .camera { grid-area: camera; } .sensors-wrap { grid-area: sensors; } .drive { grid-area: drive; }
+  .policy { grid-area: policy; }
 }

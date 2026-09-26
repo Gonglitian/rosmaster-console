@@ -19,7 +19,7 @@ OFF, STARTING, ON, ERROR, STOPPING = 'off', 'starting', 'on', 'error', 'stopping
 OUR_DRIVER_NODE = 'hf_driver'
 LIDAR_OK = 'current scan mode'
 LIDAR_FAIL = ('Can not start scan', 'Error, operation time out', 'Error, cannot bind')
-ODOM_MISSING = '可以开车，但没收到 EKF 的 /odom，面板上看不到实测速度'
+ODOM_MISSING = 'Driving works, but there is no /odom from the EKF, so measured speed is not shown'
 
 
 class Sensor(object):
@@ -52,13 +52,16 @@ class SensorManager(object):
     async def startup(self):
         """Everything starts off, and 'off' means off: stop the lidar motor and let
         the unused depth sensor suspend."""
+        if config.NO_HARDWARE:
+            log.warning('HF_NO_HARDWARE=1: not touching lidar, battery serial or USB power')
+            return
         await self._blocking(allow_depth_sensor_suspend)
         await self._stop_motor(self.sensors['lidar'])
         self._monitor_battery(True)
 
     def _monitor_battery(self, on):
         """The battery monitor owns /dev/myserial whenever the chassis driver does not."""
-        if self.reader is None:
+        if self.reader is None or config.NO_HARDWARE:
             return
         if on and 'base' not in self.procs:
             self.reader.start()
@@ -117,8 +120,10 @@ class SensorManager(object):
             self._monitor_battery(True)
 
     async def _stop_motor(self, s):
+        if config.NO_HARDWARE:
+            return
         if not await self._blocking(self.motor.stop):
-            s.message = '驱动已关，但没能停住雷达电机（串口 DTR 设置失败）'
+            s.message = 'Driver stopped, but the lidar motor could not be stopped (DTR request failed)'
             self.on_change()
 
     async def _clear_leftover(self, name):
@@ -139,17 +144,18 @@ class SensorManager(object):
         return meter.last > since and time.time() - meter.last < max_age
 
     async def _start_base(self, s):
-        self._set(s, STARTING, '检查是否已有底盘驱动在运行', attempt=1)
+        self._set(s, STARTING, 'Checking for another chassis driver', attempt=1)
         await self._clear_leftover('base')
         foreign = [n for n in self.bridge.publisher_nodes('/voltage') if n != OUR_DRIVER_NODE]
         if foreign:
-            self._set(s, ERROR, '已有别的底盘驱动在运行（节点 %s），可能是旧的 x3 容器。'
-                                '先停掉它，两个驱动会争用串口。' % ', '.join(foreign))
+            self._set(s, ERROR, 'Another chassis driver is running (node %s), probably the old x3 '
+                                'container. Stop it first: two drivers would fight over the serial port.'
+                      % ', '.join(foreign))
             return
         if self.reader is not None:
             await self._blocking(self.reader.stop)   # the driver needs /dev/myserial
         proc = self._launch('base')
-        self._set(s, STARTING, '启动驱动、IMU 滤波和 EKF')
+        self._set(s, STARTING, 'Starting driver, IMU filter and EKF')
         # Ready = the driver is alive (it publishes /voltage from the STM32 at
         # 10 Hz, and it is the node that turns /hub/cmd_vel into wheel motion).
         # /odom comes from the EKF further down the chain; missing /odom is a
@@ -158,7 +164,7 @@ class SensorManager(object):
         while time.time() < deadline:
             await asyncio.sleep(0.5)
             if not proc.running:
-                self._set(s, ERROR, '进程退出：' + ' | '.join(proc.tail(3)))
+                self._set(s, ERROR, 'Process exited: ' + ' | '.join(proc.tail(3)))
                 self.procs.pop('base', None)
                 self._monitor_battery(True)
                 return
@@ -167,7 +173,7 @@ class SensorManager(object):
         else:
             await self._blocking(proc.stop)
             self.procs.pop('base', None)
-            self._set(s, ERROR, '%.0f 秒内没收到驱动的 /voltage，底盘驱动没起来'
+            self._set(s, ERROR, 'No /voltage from the driver within %.0f s: the chassis driver did not start'
                       % config.BASE_START_TIMEOUT)
             self._monitor_battery(True)
             return
@@ -180,7 +186,7 @@ class SensorManager(object):
         last_lines = []
         await self._clear_leftover('lidar')
         for attempt in range(1, config.LIDAR_MAX_ATTEMPTS + 1):
-            self._set(s, STARTING, '第 %d 次启动' % attempt, attempt=attempt)
+            self._set(s, STARTING, 'Attempt %d' % attempt, attempt=attempt)
             result = {}
 
             def on_line(line, result=result):
@@ -204,27 +210,27 @@ class SensorManager(object):
                         self._set(s, ON, result['ok'].split(']:')[-1].strip())
                         return
                     await asyncio.sleep(0.2)
-                result['fail'] = '已进入扫描模式，但 5 秒内没收到 /scan'
-            reason = result.get('fail') or ('进程退出' if not proc.running else '启动超时')
+                result['fail'] = 'scan mode started, but no /scan within 5 s'
+            reason = result.get('fail') or ('process exited' if not proc.running else 'start timed out')
             last_lines = proc.tail(3)
             log.warning('lidar attempt %d failed: %s', attempt, reason)
             await self._blocking(proc.stop)
             self.procs.pop('lidar', None)
             if attempt < config.LIDAR_MAX_ATTEMPTS:
-                self._set(s, STARTING, '第 %d 次失败（%s），USB 软拔插后重试' % (attempt, reason))
+                self._set(s, STARTING, 'Attempt %d failed (%s); replugging USB and retrying' % (attempt, reason))
                 try:
                     await self._blocking(lambda: usbreset.replug('/dev/rplidar',
                                                                  while_unbound=self.motor.forget))
                 except Exception as e:  # no /sys write access, device missing, ...
                     log.error('USB replug failed: %s', e)
-                    self._set(s, STARTING, 'USB 软拔插失败：%s' % e)
+                    self._set(s, STARTING, 'USB replug failed: %s' % e)
                 await asyncio.sleep(1.0)
-        self._set(s, ERROR, '%d 次都没启动成功：%s' % (config.LIDAR_MAX_ATTEMPTS, ' | '.join(last_lines)))
+        self._set(s, ERROR, 'Failed after %d attempts: %s' % (config.LIDAR_MAX_ATTEMPTS, ' | '.join(last_lines)))
         await self._stop_motor(s)
 
     async def _start_camera(self, s):
         if not os.path.exists(config.CAMERA_DEVICE):
-            self._set(s, ERROR, '找不到 %s' % config.CAMERA_DEVICE)
+            self._set(s, ERROR, '%s not found' % config.CAMERA_DEVICE)
             return
         self._set(s, STARTING, '', attempt=1)
         if self.camera.running:
@@ -238,7 +244,7 @@ class SensorManager(object):
                 return
             if not self.camera.running:
                 break
-        err = ' | '.join(list(self.camera.errors)[-2:]) or '6 秒内没有画面'
+        err = ' | '.join(list(self.camera.errors)[-2:]) or 'no frame within 6 s'
         await self._blocking(self.camera.stop)
         self._set(s, ERROR, err)
 
@@ -260,7 +266,7 @@ class SensorManager(object):
             proc = self.procs.get(name)
             if proc is None or not proc.running:
                 self.procs.pop(name, None)
-                self._set(s, ERROR, '进程意外退出：' + ' | '.join(proc.tail(3) if proc else []))
+                self._set(s, ERROR, 'Process died: ' + ' | '.join(proc.tail(3) if proc else []))
                 if name == 'lidar':
                     self.loop.create_task(self._stop_motor(s))
                 elif name == 'base':
@@ -268,10 +274,10 @@ class SensorManager(object):
                 continue
             age = now - self.bridge.rates[topic].last
             if age > config.STALE_TOPIC_TIMEOUT:
-                self._set(s, ERROR, '/%s 已经 %.0f 秒没有数据' % (topic, age))
+                self._set(s, ERROR, 'No /%s for %.0f s' % (topic, age))
         cam = self.sensors['camera']
         if cam.state == ON:
             if not self.camera.running:
-                self._set(cam, ERROR, 'ffmpeg 退出：' + ' | '.join(list(self.camera.errors)[-2:]))
+                self._set(cam, ERROR, 'ffmpeg exited: ' + ' | '.join(list(self.camera.errors)[-2:]))
             elif now - self.camera.frame_time > 3.0:
-                self._set(cam, ERROR, '画面已经 %.0f 秒没有更新' % (now - self.camera.frame_time))
+                self._set(cam, ERROR, 'No new frame for %.0f s' % (now - self.camera.frame_time))

@@ -10,6 +10,9 @@ def _env(name, default, cast=float):
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PORT = _env('PORT', 8080, int)
+# Test mode for running the hub on a development machine without the car:
+# no lidar motor / battery serial / USB power control, and no Wi-Fi changes.
+NO_HARDWARE = os.environ.get('HF_NO_HARDWARE') == '1'
 WEB_DIR = os.path.join(REPO_ROOT, 'web')
 LAUNCH_DIR = os.path.join(REPO_ROOT, 'car', 'launch')
 

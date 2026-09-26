@@ -46,7 +46,7 @@ async def main():
         m = json.loads(await ws.read_message())
         if m.get('t') == 'state':
             if m['sensors']['base']['state'] != 'off':
-                print('ABORT: switch 底盘 off first (this test must not move the car)')
+                print('ABORT: switch Base off first (this test must not move the car)')
                 return 2
             break
     await tornado.gen.sleep(2.0)

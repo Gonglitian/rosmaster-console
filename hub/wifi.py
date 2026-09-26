@@ -189,16 +189,22 @@ class WifiManager(object):
                 'attempt': self.attempt, 'hotspot_profile': HOTSPOT, 'new_priority': NEW_PRIORITY,
                 'ip_by_ssid': self.ip_by_ssid}
 
+    def _guard(self):
+        from . import config
+        if config.NO_HARDWARE:
+            raise RuntimeError('Wi-Fi changes are disabled in no-hardware (test) mode')
+
     def connect(self, ssid, password=None):
         """Validate, then switch in the background so the HTTP reply gets out first
         (switching drops a browser that came in over the hotspot)."""
+        self._guard()
         ssid = (ssid or '').strip()
         if not ssid or len(ssid) > 32:
-            raise ValueError('SSID 为空或超过 32 字节')
+            raise ValueError('SSID is empty or longer than 32 bytes')
         if password is not None and password != '' and not (8 <= len(password) <= 63):
-            raise ValueError('WPA 密码长度应为 8–63 个字符')
+            raise ValueError('A WPA password has 8 to 63 characters')
         if not self._lock.acquire(False):
-            raise RuntimeError('上一次切换还没结束')
+            raise RuntimeError('The previous switch is still in progress')
         self.attempt = {'ssid': ssid, 'state': 'connecting', 'reason': None, 'time': time.time()}
         threading.Thread(target=self._connect, args=(ssid, password), daemon=True).start()
 
@@ -224,7 +230,7 @@ class WifiManager(object):
                     _nmcli(['con', 'mod', 'id', name, 'wifi-sec.psk', old_psk])
             return name, undo
         if not password and any(n['ssid'] == ssid and n['security'] for n in self.last_scan):
-            raise RuntimeError('这个网络需要密码')
+            raise RuntimeError('This network needs a password')
         visible = any(n['ssid'] == ssid for n in self.last_scan)
         args = ['con', 'add', 'type', 'wifi', 'ifname', IFACE, 'con-name', ssid, 'ssid', ssid,
                 'connection.autoconnect', 'yes', 'connection.autoconnect-priority', str(NEW_PRIORITY)]
@@ -289,8 +295,9 @@ class WifiManager(object):
         _nmcli(['--wait', '30', 'con', 'up', 'id', HOTSPOT], timeout=45)
 
     def hotspot(self):
+        self._guard()
         if not self._lock.acquire(False):
-            raise RuntimeError('上一次切换还没结束')
+            raise RuntimeError('The previous switch is still in progress')
         self.attempt = {'ssid': HOTSPOT, 'state': 'connecting', 'reason': None, 'time': time.time()}
 
         def run():
@@ -304,11 +311,12 @@ class WifiManager(object):
         threading.Thread(target=run, daemon=True).start()
 
     def forget(self, name):
+        self._guard()
         st = status()
         if name == HOTSPOT:
-            raise ValueError('不能删除小车自己的热点')
+            raise ValueError("The car's own hotspot cannot be deleted")
         if name == st.get('connection'):
-            raise ValueError('不能删除正在使用的网络，先切换到别的网络')
+            raise ValueError('This network is in use; switch to another one first')
         rc, _, err = _nmcli(['con', 'delete', 'id', name])
         if rc != 0:
             raise RuntimeError(err)
@@ -318,9 +326,9 @@ def _explain(err):
     first = (err or '').strip().splitlines()[0] if (err or '').strip() else ''   # drop nmcli's "Hint:" line
     e = first.lower()
     if 'secrets were required' in e or 'no secrets' in e or 'psk' in e:
-        return '密码错误或需要密码'
+        return 'wrong or missing password'
     if 'no network with ssid' in e or 'not found' in e or 'could not be found' in e:
-        return '附近找不到这个网络'
+        return 'network not found nearby'
     if 'timeout' in e or 'timed out' in e:
-        return '连接超时（信号弱，或密码错误）'
-    return first or '未知错误'
+        return 'timed out (weak signal or wrong password)'
+    return first or 'unknown error'

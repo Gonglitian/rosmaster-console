@@ -1,16 +1,17 @@
 'use strict';
-// 小车中控台 panel. Talks to the hub over /ws (protocol in docs/protocol.md).
+// RosMaster Console. Talks to the hub over /ws (protocol in docs/API.md).
 // Coordinates: ROS base_link, x forward, y left, wz > 0 turns left.
 
 const $ = (id) => document.getElementById(id);
 const S = {
-  ws: null, connected: false, cfg: null, state: null, scan: null, odom: null,
+  ws: null, connected: false, cfg: null, state: null, scan: null, odom: null, debug: null,
   range: 4, rtts: [], seq: 0, dirty: true,
   input: { move: [0, 0], rot: 0, padMove: false, padRot: false, keys: new Set() },
   wasDriving: false,
 };
-const MODE_TEXT = { idle: '空闲', manual: '手动', policy: 'policy' };
-const SENSOR_TEXT = { off: '关', starting: '启动中', on: '运行', error: '故障', stopping: '关闭中' };
+const MODE_TEXT = { idle: 'idle', manual: 'manual', policy: 'policy' };
+const SENSOR_TEXT = { off: 'off', starting: 'starting', on: 'on', error: 'error', stopping: 'stopping' };
+const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function store(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
 function load(key, dflt) { try { const v = localStorage.getItem(key); return v === null ? dflt : v; } catch (e) { return dflt; } }
@@ -29,7 +30,9 @@ function connect() {
     if (m.t === 'scan') { S.scan = m; S.scan.rx = performance.now(); S.dirty = true; }
     else if (m.t === 'odom') { S.odom = m; S.dirty = true; }
     else if (m.t === 'state') { S.state = m; renderState(); S.dirty = true; }
+    else if (m.t === 'policy_debug') { S.debug = m; S.debug.rx = performance.now(); S.dirty = true; }
     else if (m.t === 'hello') { S.cfg = m.config; }
+    else if (m.t === 'error') { $('sensor-msg').textContent = 'Hub: ' + m.msg; }
     else if (m.t === 'pong') {
       S.rtts.push(performance.now() - m.c); if (S.rtts.length > 5) S.rtts.shift();
       const sorted = S.rtts.slice().sort((a, b) => a - b);
@@ -51,22 +54,23 @@ function renderState() {
   const st = S.state, c = st.control;
   const mode = $('mode');
   mode.className = 'chip ' + (c.estop ? 'estop' : c.mode);
-  mode.textContent = c.estop ? '急停' : (MODE_TEXT[c.mode] || c.mode);
+  mode.textContent = c.estop ? 'E-STOP' : (MODE_TEXT[c.mode] || c.mode);
   $('estop-banner').classList.toggle('hidden', !c.estop);
-  $('estop-reason').textContent = c.estop_reason ? '（' + c.estop_reason + '）' : '';
+  $('estop-reason').textContent = c.estop_reason ? ' (' + c.estop_reason + ')' : '';
 
   renderBattery(st.battery);
   renderBatteryPage(st);
+  renderPolicy(st);
 
   let msg = '', bad = false;
   for (const btn of document.querySelectorAll('[data-sensor]')) {
     const s = st.sensors[btn.dataset.sensor];
     btn.className = 'sensor ' + s.state;
     let text = SENSOR_TEXT[s.state] || s.state;
-    if (s.state === 'starting' && s.attempt > 1) text += '·' + s.attempt;
+    if (s.state === 'starting' && s.attempt > 1) text += ' #' + s.attempt;
     btn.querySelector('span').textContent = text;
     if (s.message && s.state !== 'stopping') {
-      msg += btn.querySelector('b').textContent + '：' + s.message + '  ';
+      msg += btn.querySelector('b').textContent + ': ' + s.message + '  ';
       bad = bad || s.state === 'error';
     }
   }
@@ -75,12 +79,13 @@ function renderState() {
   $('beep').disabled = st.sensors.base.state !== 'on';
 
   const hb = $('hand-back');
-  hb.disabled = c.estop || c.mode !== 'manual';
-  hb.textContent = c.active_policy ? '交还 policy' : '退出手动';
+  const canResume = c.active_policy && c.mode === 'idle' && !c.estop;
+  hb.disabled = c.estop || !(c.mode === 'manual' || canResume);
+  hb.textContent = c.active_policy ? 'Hand back to policy' : 'Exit manual';
 
   const o = c.output;
-  $('cmd').textContent = '输出 vx ' + o[0].toFixed(2) + ' · vy ' + o[1].toFixed(2) + ' · ω ' + o[2].toFixed(2) +
-    (c.mode !== 'idle' && c.source_age != null ? ' · 指令距今 ' + Math.round(c.source_age * 1000) + ' ms' : '');
+  $('cmd').textContent = 'Output vx ' + o[0].toFixed(2) + ' · vy ' + o[1].toFixed(2) + ' · ω ' + o[2].toFixed(2) +
+    (c.mode !== 'idle' && c.source_age != null ? ' · last command ' + Math.round(c.source_age * 1000) + ' ms ago' : '');
   for (const p of document.querySelectorAll('.pad')) p.classList.toggle('disabled', c.estop);
 
   const cam = st.sensors.camera.state === 'on', img = $('cam');
@@ -88,31 +93,61 @@ function renderState() {
   if (cam && !img.getAttribute('src')) img.src = '/camera.mjpg?' + Date.now();
   if (!cam && img.getAttribute('src')) img.removeAttribute('src');
 
-  const t = st.topics, sys = st.sys || {};
+  const t = st.topics, sys = st.sys || {}, net = sys.net || {};
   $('info').textContent = [
-    '雷达 ' + t.scan.hz.toFixed(1) + ' Hz', '里程计 ' + t.odom.hz.toFixed(1) + ' Hz',
-    '面板 ' + st.clients, sys.ip ? 'IP ' + sys.ip : null,
-    sys.disk_free_gb != null ? '磁盘剩 ' + sys.disk_free_gb.toFixed(1) + ' GB' : null,
+    'lidar ' + t.scan.hz.toFixed(1) + ' Hz', 'odom ' + t.odom.hz.toFixed(1) + ' Hz',
+    'dashboards ' + (st.panels != null ? st.panels : st.clients),
+    net.hotspot ? 'hotspot ' + net.ssid : net.ssid ? 'Wi-Fi ' + net.ssid : null,
+    (net.ip || sys.ip) ? 'IP ' + (net.ip || sys.ip) : null,
+    sys.disk_free_gb != null ? 'disk free ' + sys.disk_free_gb.toFixed(1) + ' GB' : null,
     sys.cpu_temp_c != null ? 'CPU ' + sys.cpu_temp_c + '°C' : null,
-    'hub 运行 ' + fmtDur(st.uptime),
+    'hub up ' + fmtDur(st.uptime),
   ].filter(Boolean).join(' · ');
 }
-// Battery: the hub estimates percent from resting voltage (see hub/battery.py).
-const BAT_STATE = { resting: '', settling: '估算中', driving: '行驶中，保持读数' };
+// Battery chip in the header: the hub estimates percent from resting voltage (hub/battery.py).
+const BAT_STATE = { resting: '', settling: 'estimating', driving: 'driving, held' };
 function renderBattery(b) {
   const el = $('battery');
   el.classList.remove('low', 'warn');
-  if (!b || b.state === 'nodata') { el.textContent = '🔋 —'; el.title = '底盘关闭时没有电压数据'; return; }
+  if (!b || b.state === 'nodata') { el.textContent = '🔋 —'; el.title = 'No voltage reading'; return; }
   const pct = b.pct == null ? '—' : '≈' + b.pct + '%';
   const note = BAT_STATE[b.state] ? ' · ' + BAT_STATE[b.state] : '';
   el.textContent = '🔋 ' + pct + ' · ' + b.v.toFixed(1) + ' V' + note;
-  const LEVEL = { warn: '电量低，尽快充电', critical: '电量很低，结束测试准备充电', stop: '已到 9.6 V 报警线，立即停车充电' };
-  el.title = (LEVEL[b.level] ? LEVEL[b.level] + '\n' : '') + '静止电压 ' + (b.v_rest == null ? '—' : b.v_rest.toFixed(2) + ' V') +
-    '，按 3S 三元锂曲线估算，0% = 9.6 V（Yahboom 报警点）。电池类型未确认。';
+  const LEVEL = { warn: 'Battery low: charge soon', critical: 'Battery very low: finish and charge', stop: 'At the 9.6 V alarm: stop and charge now' };
+  el.title = (LEVEL[b.level] ? LEVEL[b.level] + '\n' : '') + 'Resting voltage ' + (b.v_rest == null ? '—' : b.v_rest.toFixed(2) + ' V') +
+    '. Estimated from a 3S NMC curve, 0% = 9.6 V (Yahboom alarm). Pack chemistry not confirmed. Click for details.';
   if (b.level === 'critical' || b.level === 'stop') el.classList.add('low');
   else if (b.level === 'warn') el.classList.add('warn');
 }
-function fmtDur(s) { return s < 90 ? s + ' 秒' : s < 5400 ? Math.round(s / 60) + ' 分' : (s / 3600).toFixed(1) + ' 时'; }
+function fmtDur(s) { return s < 90 ? s + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(1) + ' h'; }
+
+// ---------- policy workers ----------
+function renderPolicy(st) {
+  const c = st.control, workers = st.workers || [];
+  $('pol-mode').textContent = c.active_policy
+    ? (c.mode === 'policy' && !c.estop ? 'policy is driving' : 'policy has control, not driving (' + (c.estop ? 'E-STOP' : c.mode) + ')')
+    : 'no policy has control';
+  if (!workers.length) {
+    $('pol-list').innerHTML = '<li class="note">No policy worker connected. Start one on a laptop on the same network, e.g. <code>python3 worker/examples/keep_distance.py</code> (see docs/POLICY.md).</li>';
+    return;
+  }
+  $('pol-list').innerHTML = workers.map((w) => {
+    const driving = w.active && c.mode === 'policy' && !c.estop;
+    const meta = w.cmd_hz + ' Hz' + (w.latency_ms != null ? ' · ' + w.latency_ms + ' ms obs→cmd' : '') +
+      (w.last_cmd_age != null && w.last_cmd_age > 1 ? ' · silent ' + w.last_cmd_age.toFixed(0) + ' s' : '');
+    const btn = w.active
+      ? '<button type="button" data-deactivate="1">Stop policy</button>'
+      : '<button type="button" data-activate="' + esc(w.id) + '"' + (c.estop ? ' disabled' : '') + '>Give control</button>';
+    return '<li class="nw-item"><div class="top"><span class="name">' + esc(w.name) + ' <span class="meta">@' + esc(w.host) + '</span></span>' +
+      (driving ? '<span class="nw-tag use">driving</span>' : w.active ? '<span class="nw-tag">has control</span>' : '') +
+      '<span class="meta">' + meta + '</span>' + btn + '</div></li>';
+  }).join('');
+}
+$('pol-list').addEventListener('click', (e) => {
+  const a = e.target.closest('[data-activate]'), d = e.target.closest('[data-deactivate]');
+  if (a) send({ t: 'activate_policy', worker_id: a.dataset.activate });
+  if (d) send({ t: 'deactivate_policy' });
+});
 
 // ---------- buttons ----------
 $('estop').addEventListener('click', () => send({ t: 'estop' }));
@@ -227,6 +262,7 @@ setInterval(() => {
 
 // ---------- top-down view ----------
 const canvas = $('topdown'), ctx = canvas.getContext('2d');
+const MARKER_COLOR = { human: '#f5a142', target: '#e25cf0', goal: '#3ecf8e', point: '#5ad1ff' };
 function draw() {
   requestAnimationFrame(draw);
   const dpr = window.devicePixelRatio || 1;
@@ -261,8 +297,20 @@ function draw() {
       const [px, py] = P(cfg.laser_x + r * Math.cos(a), r * Math.sin(a));
       ctx.fillRect(px - rad / 2, py - rad / 2, rad, rad);
     }
-    if (stale) note.push('雷达数据已 ' + scanAge.toFixed(0) + ' 秒未更新');
-  } else note.push('没有雷达数据：在右侧打开「底盘」和「雷达」');
+    if (stale) note.push('lidar data is ' + scanAge.toFixed(0) + ' s old');
+  } else note.push('No lidar data: turn on Base and Lidar');
+
+  // Markers sent by the policy worker (policy_debug), shown for 2 s.
+  if (S.debug && performance.now() - S.debug.rx < 2000) {
+    for (const m of S.debug.markers || []) {
+      if (typeof m.x !== 'number' || typeof m.y !== 'number') continue;
+      const [px, py] = P(m.x, m.y);
+      ctx.fillStyle = ctx.strokeStyle = MARKER_COLOR[m.kind] || MARKER_COLOR.point;
+      ctx.lineWidth = 2 * dpr;
+      ctx.beginPath(); ctx.arc(px, py, 7 * dpr, 0, Math.PI * 2); ctx.stroke();
+      if (m.label) ctx.fillText(String(m.label).slice(0, 24), px + 9 * dpr, py - 6 * dpr);
+    }
+  }
 
   // Robot footprint (~0.30 m long, 0.26 m wide) and heading.
   const L = 0.15, W = 0.13, corners = [[L, W], [L, -W], [-L, -W], [-L, W]].map(([x, y]) => P(x, y));
@@ -284,7 +332,9 @@ function draw() {
   };
   if (S.odom) arrow(S.odom.vx, S.odom.vy, '#5aa9ff');
   if (S.state) { const o = S.state.control.output; arrow(o[0], o[1], '#3ecf8e'); }
-  $('view-note').textContent = note.join(' · ') || '绿箭头：下发速度　蓝箭头：实测速度';
+  const dbg = S.debug && performance.now() - S.debug.rx < 2000 && S.debug.text ? 'policy: ' + S.debug.text : null;
+  $('pol-debug').textContent = dbg || '';
+  $('view-note').textContent = note.join(' · ') || 'green arrow: commanded velocity · blue arrow: measured velocity';
 }
 
 // ---------- tabs ----------
@@ -304,9 +354,9 @@ const batteryVisible = () => !$('tab-battery').classList.contains('hidden');
 
 // ---------- battery page ----------
 const BAT = { report: null };
-const STATE_TEXT = { resting: '静止', settling: '估算中（需要静止约 2 秒）', driving: '行驶中（读数保持）', nodata: '没有电压数据' };
-const LEVEL_TEXT = { ok: '正常', warn: '电量低，尽快充电', critical: '电量很低，结束测试准备充电', stop: '已到 9.6 V 报警线，立即停车并关机充电', unknown: '—' };
-const SOURCE_TEXT = { driver: '底盘驱动（/voltage）', monitor: '电量监测（底盘关闭时直接读底盘板）' };
+const STATE_TEXT = { resting: 'resting', settling: 'estimating (needs ~2 s at rest)', driving: 'driving (reading held)', nodata: 'no voltage reading' };
+const LEVEL_TEXT = { ok: 'OK', warn: 'Battery low: charge soon', critical: 'Battery very low: finish and charge', stop: 'At the 9.6 V alarm: stop, switch off and charge', unknown: '—' };
+const SOURCE_TEXT = { driver: 'chassis driver (/voltage)', monitor: 'battery monitor (reads the chassis board while Base is off)' };
 for (const id of ['bp-cap', 'bp-cur']) {
   const el = $(id);
   el.value = load(id, el.value);
@@ -323,10 +373,10 @@ function pctFor(v, table) {
 }
 function fmtMin(m) {
   if (m == null) return '—';
-  if (m < 1) return '不到 1 分钟';
-  if (m < 90) return Math.round(m) + ' 分钟';
+  if (m < 1) return 'under 1 min';
+  if (m < 90) return Math.round(m) + ' min';
   const h = Math.floor(m / 60), r = Math.round(m % 60);
-  return h + ' 小时' + (r ? ' ' + r + ' 分' : '');
+  return h + ' h' + (r ? ' ' + r + ' min' : '');
 }
 async function fetchBattery() {
   try {
@@ -345,8 +395,8 @@ function buildScale() {
   bar.querySelectorAll('.bat-tick').forEach((e) => e.remove());
   scale.innerHTML = '';
   const marks = [
-    [T.alarm, '9.6 V 报警', 'alarm'], [T.critical, '10.0 V 收车', 'warn'],
-    [T.warn, '10.5 V 提醒', 'warn'], [T.full, '12.6 V 满', '']];
+    [T.alarm, '9.6 V alarm', 'alarm'], [T.critical, '10.0 V finish', 'warn'],
+    [T.warn, '10.5 V warning', 'warn'], [T.full, '12.6 V full', '']];
   for (const [v, label, cls] of marks) {
     const x = pctFor(v, tbl);
     const tick = document.createElement('div');
@@ -363,7 +413,7 @@ function buildScale() {
   const b0 = pctFor(T.storage[0], tbl), b1 = pctFor(T.storage[1], tbl);
   const band = $('bp-band'); band.style.left = b0 + '%'; band.style.width = (b1 - b0) + '%';
   const sp = document.createElement('span');
-  sp.textContent = '存放 11.1–11.7 V'; sp.style.left = ((b0 + b1) / 2) + '%';
+  sp.textContent = 'storage 11.1–11.7 V'; sp.style.left = ((b0 + b1) / 2) + '%';
   scale.appendChild(sp);
 }
 
@@ -375,8 +425,8 @@ function renderBatteryPage(st) {
   $('bp-state').textContent = b.state === 'nodata' ? STATE_TEXT.nodata
     : (LEVEL_TEXT[b.level] || '—') + ' · ' + (STATE_TEXT[b.state] || b.state);
   $('bp-state').style.color = b.level === 'critical' || b.level === 'stop' ? 'var(--bad)' : b.level === 'warn' ? 'var(--warn)' : '';
-  $('bp-sub').textContent = b.v == null ? '底盘关着时由电量监测读电压；如果一直没有数据，检查 hub 日志'
-    : b.v.toFixed(2) + ' V · 每节电芯 ' + b.cell_v.toFixed(2) + ' V · 来源：' + (SOURCE_TEXT[b.source] || '—');
+  $('bp-sub').textContent = b.v == null ? 'With Base off the battery monitor reads the voltage; if nothing shows up, check the hub log'
+    : b.v.toFixed(2) + ' V · per cell ' + b.cell_v.toFixed(2) + ' V · source: ' + (SOURCE_TEXT[b.source] || '—');
   const fill = $('bp-fill');
   fill.style.width = (pctExact == null ? 0 : Math.max(0, Math.min(100, pctExact))) + '%';
   fill.className = 'bat-fill' + (b.level === 'critical' || b.level === 'stop' ? ' low' : b.level === 'warn' ? ' warn' : '');
@@ -385,44 +435,44 @@ function renderBatteryPage(st) {
 
   // Discharge: measured drain rate
   const e = b.eta, tr = b.trend, dis = $('bp-discharge');
-  if (b.state === 'nodata') dis.innerHTML = '<span class="muted">没有电压数据。</span>';
-  else if (!e) dis.innerHTML = '<span class="muted">正在积累数据：需要连续静止约 5 分钟，才能算出耗电速度。</span>';
-  else if (e.status === 'steady') dis.innerHTML = '最近 ' + tr.span_min + ' 分钟电量几乎没变（' + tr.pct_per_h + '%/小时）。';
-  else if (e.status === 'rising') dis.innerHTML = '最近 ' + tr.span_min + ' 分钟电压在上升（刚停车后的回升，或正在开机充电；Yahboom 不建议边充边用）。';
+  if (b.state === 'nodata') dis.innerHTML = '<span class="muted">No voltage reading.</span>';
+  else if (!e) dis.innerHTML = '<span class="muted">Collecting data: the drain rate needs about 5 minutes at rest.</span>';
+  else if (e.status === 'steady') dis.innerHTML = 'Almost no change in the last ' + tr.span_min + ' min (' + tr.pct_per_h + ' %/h).';
+  else if (e.status === 'rising') dis.innerHTML = 'Voltage rising over the last ' + tr.span_min + ' min (recovering after driving, or charging while switched on, which Yahboom advises against).';
   else {
-    const line = (name, label) => e[name] === 0 ? label + '：<b>已经低于</b>' : label + '：约 <b>' + fmtMin(e[name]) + '</b>';
-    const on = Object.entries(st.sensors).filter(([, v]) => v.state === 'on').map(([k]) => ({ base: '底盘', lidar: '雷达', camera: '相机' }[k]));
-    dis.innerHTML = line('warn', '到提醒线 10.5 V') + '<br>' + line('critical', '到收车线 10.0 V') + '<br>' +
-      line('alarm', '到蜂鸣报警 9.6 V') +
-      '<div class="note">按最近 ' + tr.span_min + ' 分钟的耗电速度（' + (-tr.pct_per_h).toFixed(1) + '%/小时）推算；当前开着：' +
-      (on.length ? on.join('、') : '无') + '。开车或多开传感器会更快。</div>';
+    const line = (name, label) => e[name] === 0 ? label + ': <b>already below</b>' : label + ': about <b>' + fmtMin(e[name]) + '</b>';
+    const on = Object.entries(st.sensors).filter(([, v]) => v.state === 'on').map(([k]) => ({ base: 'Base', lidar: 'Lidar', camera: 'Camera' }[k]));
+    dis.innerHTML = line('warn', 'to the 10.5 V warning') + '<br>' + line('critical', 'to the 10.0 V finish line') + '<br>' +
+      line('alarm', 'to the 9.6 V alarm') +
+      '<div class="note">From the drain rate over the last ' + tr.span_min + ' min (' + (-tr.pct_per_h).toFixed(1) + ' %/h). On now: ' +
+      (on.length ? on.join(', ') : 'nothing') + '. Driving or more sensors drain faster.</div>';
   }
 
   // Charge: estimate from capacity and charger current
   const cap = +$('bp-cap').value, cur = +$('bp-cur').value, chg = $('bp-charge');
-  if (pctExact == null || !cap || !cur) chg.innerHTML = '<span class="muted">没有电量数据时无法估算。</span>';
+  if (pctExact == null || !cap || !cur) chg.innerHTML = '<span class="muted">No battery reading to estimate from.</span>';
   else {
     const hours = (p) => Math.max(0, (p - pctExact) / 100) * cap / (cur * 1000) * 1.15;   // +15 % for the constant-voltage tail
     const storeLo = pctFor(BAT.report ? BAT.report.thresholds.storage[0] : 11.1, tbl);
-    chg.innerHTML = '从 ≈' + (b.pct != null ? b.pct : Math.round(pctExact)) + '% 充满：约 <b>' + fmtMin(hours(100) * 60) + '</b>' +
-      (pctExact < storeLo ? '<br>只充到长期存放区间（11.1 V）：约 <b>' + fmtMin(hours(storeLo) * 60) + '</b>' : '') +
-      '<div class="note">按 ' + cap + ' mAh、' + cur + ' A 估算，另加 15% 给末段恒压充电。</div>';
+    chg.innerHTML = 'From ≈' + (b.pct != null ? b.pct : Math.round(pctExact)) + '% to full: about <b>' + fmtMin(hours(100) * 60) + '</b>' +
+      (pctExact < storeLo ? '<br>Only to the storage range (11.1 V): about <b>' + fmtMin(hours(storeLo) * 60) + '</b>' : '') +
+      '<div class="note">Assumes ' + cap + ' mAh and ' + cur + ' A, plus 15% for the final constant-voltage phase.</div>';
   }
 
   const d = [
-    ['当前读数', b.v != null ? b.v.toFixed(2) + ' V' : '—'],
-    ['静止电压（平滑后）', b.v_rest != null ? b.v_rest.toFixed(2) + ' V' : '—'],
-    ['最近 2 秒平均', b.v_fast != null ? b.v_fast.toFixed(2) + ' V' : '—'],
-    ['每节电芯（3 节串联）', b.cell_v != null ? b.cell_v.toFixed(3) + ' V' : '—'],
-    ['估算电量', pctExact != null ? pctExact.toFixed(1) + '%' : '—'],
-    ['电压变化', tr ? tr.v_per_h.toFixed(2) + ' V/小时（最近 ' + tr.span_min + ' 分钟）' : '数据不足'],
-    ['电量变化', tr ? tr.pct_per_h.toFixed(1) + ' %/小时' : '数据不足'],
-    ['状态', (STATE_TEXT[b.state] || '—') + ' · ' + (LEVEL_TEXT[b.level] || '—')],
-    ['数据来源', SOURCE_TEXT[b.source] || '—'],
-    ['数据更新', b.age != null ? b.age + ' 秒前' : '—'],
-    ['0% 的定义', '9.6 V（Yahboom 蜂鸣报警点）'],
-    ['自动急停', '9.0 V'],
-    ['电池类型', '3S 锂电，按三元锂曲线估算（类型未确认）'],
+    ['Current reading', b.v != null ? b.v.toFixed(2) + ' V' : '—'],
+    ['Resting voltage (smoothed)', b.v_rest != null ? b.v_rest.toFixed(2) + ' V' : '—'],
+    ['Last 2 s average', b.v_fast != null ? b.v_fast.toFixed(2) + ' V' : '—'],
+    ['Per cell (3 in series)', b.cell_v != null ? b.cell_v.toFixed(3) + ' V' : '—'],
+    ['Estimated charge', pctExact != null ? pctExact.toFixed(1) + '%' : '—'],
+    ['Voltage trend', tr ? tr.v_per_h.toFixed(2) + ' V/h (last ' + tr.span_min + ' min)' : 'not enough data'],
+    ['Charge trend', tr ? tr.pct_per_h.toFixed(1) + ' %/h' : 'not enough data'],
+    ['State', (STATE_TEXT[b.state] || '—') + ' · ' + (LEVEL_TEXT[b.level] || '—')],
+    ['Source', SOURCE_TEXT[b.source] || '—'],
+    ['Updated', b.age != null ? b.age + ' s ago' : '—'],
+    ['0% means', '9.6 V (Yahboom alarm beep)'],
+    ['Automatic E-STOP', '9.0 V'],
+    ['Pack', '3S lithium, estimated with an NMC curve (chemistry not confirmed)'],
   ];
   $('bp-details').innerHTML = d.map(([k, v]) => '<dt>' + k + '</dt><dd>' + v + '</dd>').join('');
 }
@@ -448,9 +498,9 @@ function drawBatteryChart() {
     g.setLineDash([]); g.globalAlpha = 1; g.fillStyle = '#8b95a3'; g.fillText(lab + ' V', 4 * dpr, Y(v) + 4 * dpr);
   }
   const mins = Math.round((now - t0) / 60);
-  g.fillStyle = '#8b95a3'; g.fillText(mins + ' 分钟前', padL, h - 5 * dpr);
-  const lbl = '现在'; g.fillText(lbl, w - padR - g.measureText(lbl).width, h - 5 * dpr);
-  if (!pts.length) { $('bp-chart-note').textContent = '还没有数据。'; return; }
+  g.fillStyle = '#8b95a3'; g.fillText(mins + ' min ago', padL, h - 5 * dpr);
+  const lbl = 'now'; g.fillText(lbl, w - padR - g.measureText(lbl).width, h - 5 * dpr);
+  if (!pts.length) { $('bp-chart-note').textContent = 'No data yet.'; return; }
   for (const resting of [false, true]) {
     g.strokeStyle = resting ? '#5aa9ff' : '#8b95a3'; g.lineWidth = (resting ? 2 : 1) * dpr;
     g.beginPath(); let pen = false, lastT = null;
@@ -460,15 +510,15 @@ function drawBatteryChart() {
     }
     g.stroke();
   }
-  $('bp-chart-note').textContent = '蓝线：静止电压（平滑后）；灰线：行驶中的读数（被负载拉低，不代表电量）。每 5 秒一个点，最多保留 3 小时（hub 重启会清空）。';
+  $('bp-chart-note').textContent = 'Blue: resting voltage (smoothed). Grey: readings while driving (pulled down by the load, not a charge level). One point every 5 s, up to 3 h (cleared when the hub restarts).';
 }
 window.addEventListener('resize', () => { if (batteryVisible()) drawBatteryChart(); });
 
 connect();
 requestAnimationFrame(draw);
+
 // ---------- network page (Wi-Fi setup; the car has no keyboard) ----------
 const NW = { report: null, openForm: null, watcher: null, hotspotArmed: 0 };
-const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 async function api(path, body) {
   const opt = body === undefined ? { cache: 'no-store' } : { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } };
   const r = await fetch(path, opt);
@@ -477,56 +527,53 @@ async function api(path, body) {
   return j;
 }
 async function loadWifi() {
-  try { NW.report = await api('/api/wifi'); renderWifi(); } catch (e) { $('nw-now').textContent = '读取网络状态失败：' + e.message; }
+  try { NW.report = await api('/api/wifi'); renderWifi(); } catch (e) { $('nw-now').textContent = 'Could not read the network state: ' + e.message; }
 }
 function bars(sig) {
   const n = sig >= 75 ? 4 : sig >= 55 ? 3 : sig >= 35 ? 2 : 1;
-  return '<span class="nw-bars" title="信号 ' + sig + '%">' + [4, 7, 10, 12].map((h, i) => '<i class="' + (i < n ? 'on' : '') + '" style="height:' + h + 'px"></i>').join('') + '</span>';
+  return '<span class="nw-bars" title="signal ' + sig + '%">' + [4, 7, 10, 12].map((h, i) => '<i class="' + (i < n ? 'on' : '') + '" style="height:' + h + 'px"></i>').join('') + '</span>';
 }
 function renderWifi() {
   const r = NW.report; if (!r) return;
   const st = r.status || {};
-  const host = location.hostname;
   const addr = st.ip ? 'http://' + st.ip + ':8080' : '—';
-  $('nw-now').innerHTML = '<dt>模式</dt><dd>' + (st.hotspot ? '小车热点（' + esc(st.ssid) + '，密码 12345678）' : st.state === 'connected' ? '已连接 Wi-Fi' : esc(st.state || '—')) + '</dd>' +
-    (st.hotspot ? '' : '<dt>网络</dt><dd>' + esc(st.ssid || '—') + '</dd>') +
-    '<dt>小车 IP</dt><dd>' + esc(st.ip || '—') + '</dd>' +
-    '<dt>面板地址</dt><dd>http://rosmaster.local:8080　或　' + esc(addr) + '</dd>';
+  $('nw-now').innerHTML = '<dt>Mode</dt><dd>' + (st.hotspot ? "Car's own hotspot (" + esc(st.ssid) + ', password 12345678)' : st.state === 'connected' ? 'Connected to Wi-Fi' : esc(st.state || '—')) + '</dd>' +
+    (st.hotspot ? '' : '<dt>Network</dt><dd>' + esc(st.ssid || '—') + '</dd>') +
+    '<dt>Car IP</dt><dd>' + esc(st.ip || '—') + '</dd>' +
+    '<dt>Dashboard</dt><dd>http://rosmaster.local:8080　or　' + esc(addr) + '</dd>';
   $('nw-hotspot').disabled = !!st.hotspot;
-  // scan list
-  const note = r.scan_error ? '扫描失败：' + esc(r.scan_error) + '（小车开热点时可能扫不了，可以手动输入网络名）'
-    : r.scan_time ? '上次扫描：' + Math.round(Date.now() / 1000 - r.scan_time) + ' 秒前（扫描时 Wi-Fi 会有零点几秒的延迟抖动，开车时别频繁点）' : '还没扫描，点右上角「扫描」。';
+  const note = r.scan_error ? 'Scan failed: ' + esc(r.scan_error) + ' (you can still type a network name below)'
+    : r.scan_time ? 'Last scan ' + Math.round(Date.now() / 1000 - r.scan_time) + ' s ago (a scan adds a short Wi-Fi latency spike; avoid it while driving)' : 'Not scanned yet: press Scan.';
   $('nw-scan-note').innerHTML = note;
   $('nw-list').innerHTML = (r.scan || []).map((n) => {
     const open = NW.openForm === n.ssid;
-    const tags = (n.in_use ? '<span class="nw-tag use">正在使用</span>' : '') + (n.known ? '<span class="nw-tag">已保存</span>' : '');
-    const lock = n.security ? '🔒 ' + esc(n.security) : '开放';
+    const tags = (n.in_use ? '<span class="nw-tag use">in use</span>' : '') + (n.known ? '<span class="nw-tag">saved</span>' : '');
+    const lock = n.security ? '🔒 ' + esc(n.security) : 'open';
     return '<li class="nw-item"><div class="top"><span class="name">' + esc(n.ssid) + '</span>' + tags +
       '<span class="meta">' + bars(n.signal) + ' ' + n.band + ' · ' + lock + '</span>' +
-      (n.in_use ? '' : '<button type="button" data-connect="' + esc(n.ssid) + '">' + (open ? '取消' : '连接') + '</button>') + '</div>' +
-      (open ? '<div class="nw-form">' + (n.security ? '<input type="password" id="nw-inline-pass" placeholder="' + (n.known ? '已保存密码，可留空' : 'Wi-Fi 密码') + '" autocomplete="off">' : '') +
-        '<button type="button" data-go="' + esc(n.ssid) + '" data-secured="' + (n.security ? 1 : 0) + '" data-known="' + (n.known ? 1 : 0) + '">连接到这个网络</button></div>' : '') + '</li>';
+      (n.in_use ? '' : '<button type="button" data-connect="' + esc(n.ssid) + '">' + (open ? 'Cancel' : 'Connect') + '</button>') + '</div>' +
+      (open ? '<div class="nw-form">' + (n.security ? '<input type="password" id="nw-inline-pass" placeholder="' + (n.known ? 'saved password; may be left empty' : 'Wi-Fi password') + '" autocomplete="off">' : '') +
+        '<button type="button" data-go="' + esc(n.ssid) + '" data-secured="' + (n.security ? 1 : 0) + '" data-known="' + (n.known ? 1 : 0) + '">Connect to this network</button></div>' : '') + '</li>';
   }).join('');
-  // saved list
   $('nw-saved').innerHTML = (r.saved || []).map((p) => {
     const using = st.connection === p.name;
-    const tag = p.mode === 'ap' ? '<span class="nw-tag">小车热点</span>' : using ? '<span class="nw-tag use">正在使用</span>' : '';
-    const del = p.mode === 'ap' || using ? '' : '<button type="button" data-forget="' + esc(p.name) + '">删除</button>';
-    return '<li class="nw-item"><div class="top"><span class="name">' + esc(p.name) + (p.ssid && p.ssid !== p.name ? '（' + esc(p.ssid) + '）' : '') + '</span>' + tag +
-      '<span class="meta">优先级 ' + p.priority + '</span>' + del + '</div></li>';
+    const tag = p.mode === 'ap' ? '<span class="nw-tag">car hotspot</span>' : using ? '<span class="nw-tag use">in use</span>' : '';
+    const del = p.mode === 'ap' || using ? '' : '<button type="button" data-forget="' + esc(p.name) + '">Delete</button>';
+    return '<li class="nw-item"><div class="top"><span class="name">' + esc(p.name) + (p.ssid && p.ssid !== p.name ? ' (' + esc(p.ssid) + ')' : '') + '</span>' + tag +
+      '<span class="meta">priority ' + p.priority + '</span>' + del + '</div></li>';
   }).join('');
 }
 $('nw-scan').addEventListener('click', async () => {
-  const b = $('nw-scan'); b.disabled = true; b.textContent = '扫描中…';
-  try { NW.report = await api('/api/wifi/scan', {}); renderWifi(); } catch (e) { $('nw-scan-note').textContent = '扫描失败：' + e.message; }
-  b.disabled = false; b.textContent = '扫描';
+  const b = $('nw-scan'); b.disabled = true; b.textContent = 'Scanning…';
+  try { NW.report = await api('/api/wifi/scan', {}); renderWifi(); } catch (e) { $('nw-scan-note').textContent = 'Scan failed: ' + e.message; }
+  b.disabled = false; b.textContent = 'Scan';
 });
 $('nw-list').addEventListener('click', (e) => {
   const c = e.target.closest('[data-connect]'), g = e.target.closest('[data-go]');
   if (c) { NW.openForm = NW.openForm === c.dataset.connect ? null : c.dataset.connect; renderWifi(); const i = $('nw-inline-pass'); if (i) i.focus(); }
   if (g) {
     const pw = $('nw-inline-pass') ? $('nw-inline-pass').value : '';
-    if (g.dataset.secured === '1' && g.dataset.known !== '1' && pw.length < 8) { $('nw-scan-note').textContent = '请输入密码（至少 8 位）'; return; }
+    if (g.dataset.secured === '1' && g.dataset.known !== '1' && pw.length < 8) { $('nw-scan-note').textContent = 'Enter the password (at least 8 characters)'; return; }
     startConnect(g.dataset.go, pw);
   }
 });
@@ -537,25 +584,25 @@ $('nw-manual-go').addEventListener('click', () => {
 });
 $('nw-saved').addEventListener('click', async (e) => {
   const f = e.target.closest('[data-forget]'); if (!f) return;
-  if (f.dataset.armed !== '1') { f.dataset.armed = '1'; f.textContent = '再点一次确认删除'; return; }
+  if (f.dataset.armed !== '1') { f.dataset.armed = '1'; f.textContent = 'Press again to delete'; return; }
   try { NW.report = await api('/api/wifi/forget', { name: f.dataset.forget }); renderWifi(); } catch (err) { alertLine(err.message); }
 });
 $('nw-hotspot').addEventListener('click', async () => {
   const b = $('nw-hotspot');
-  if (Date.now() - NW.hotspotArmed > 4000) { NW.hotspotArmed = Date.now(); b.textContent = '再点一次确认（当前网络上的面板会断开）'; setTimeout(() => { b.textContent = '切换到小车热点'; }, 4000); return; }
-  b.textContent = '切换到小车热点';
+  if (Date.now() - NW.hotspotArmed > 4000) { NW.hotspotArmed = Date.now(); b.textContent = 'Press again to confirm (dashboards on this network will disconnect)'; setTimeout(() => { b.textContent = "Switch to the car's hotspot"; }, 4000); return; }
+  b.textContent = "Switch to the car's hotspot";
   try { await api('/api/wifi/hotspot', {}); } catch (e) { alertLine(e.message); return; }
-  showOverlay('小车正在切换到自己的热点', '<ol><li>小车会离开当前网络，开热点 <b>ROSMASTER</b>（密码 12345678）。</li><li>把这台电脑或手机连到 ROSMASTER。</li><li>这个页面会自动跳到 http://192.168.1.11:8080；没跳的话手动打开它。</li></ol>');
+  showOverlay("The car is switching to its own hotspot", '<ol><li>The car leaves this network and opens the hotspot <b>ROSMASTER</b> (password 12345678).</li><li>Join ROSMASTER with this laptop or phone.</li><li>This page then jumps to http://192.168.1.11:8080 by itself; if not, open that address.</li></ol>');
   watch(['http://192.168.1.11:8080', 'http://rosmaster.local:8080'], 'ROSMASTER');
 });
 function alertLine(msg) { $('nw-scan-note').textContent = msg; }
 async function startConnect(ssid, pw) {
-  try { await api('/api/wifi/connect', { ssid: ssid, password: pw || '' }); } catch (e) { alertLine('没能开始连接：' + e.message); return; }
+  try { await api('/api/wifi/connect', { ssid: ssid, password: pw || '' }); } catch (e) { alertLine('Could not start: ' + e.message); return; }
   NW.openForm = null;
-  showOverlay('小车正在连接「' + esc(ssid) + '」',
-    '<ol><li>小车切换网络大约要 10–45 秒。</li><li>如果你现在是通过 ROSMASTER 热点连着小车，热点会消失、连接会断开，这是正常的。</li>' +
-    '<li>把这台电脑或手机也连到「' + esc(ssid) + '」。</li><li>这个页面会自动跳到 http://rosmaster.local:8080。一直没跳的话，看小车 OLED 小屏上的 IP，打开 http://那个IP:8080。</li>' +
-    '<li>如果密码错了，小车会回到原来的网络；如果原来的网络也不在附近，它会自己开热点 ROSMASTER，重新连上热点再试。</li></ol>');
+  showOverlay('The car is joining "' + esc(ssid) + '"',
+    '<ol><li>Switching takes about 10–45 s.</li><li>If you reached the car through its ROSMASTER hotspot, the hotspot disappears and this page loses the car. That is expected.</li>' +
+    '<li>Move this laptop or phone to "' + esc(ssid) + '" too.</li><li>This page then jumps to http://rosmaster.local:8080 by itself. If it never does, read the IP on the car\'s OLED screen and open http://that-IP:8080.</li>' +
+    '<li>With a wrong password the car goes back to the network it was on; if that one is gone too, it opens the ROSMASTER hotspot so you can try again.</li></ol>');
   watch(targetsFor(ssid), ssid);
 }
 function showOverlay(title, body) {
@@ -563,8 +610,8 @@ function showOverlay(title, body) {
   $('nw-overlay').classList.remove('hidden');
 }
 $('nw-ov-close').addEventListener('click', () => { $('nw-overlay').classList.add('hidden'); if (NW.watcher) clearInterval(NW.watcher); NW.watcher = null; loadWifi(); });
-// Ask the car at `base` which network it is on. /api/net allows cross-origin
-// reads (and is fast: no listing of saved networks), so this works from the page's old address. Short timeout: a dead
+// Ask the car at `base` which network it is on. /api/net allows cross-origin reads
+// and is fast, so this works from the page's old address. Short timeout: a dead
 // address must never block the next probe.
 async function probeCar(base, ms) {
   const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms || 4000);
@@ -588,7 +635,7 @@ function watch(targets, ssid) {
         const r = await probeCar(u, 4000);
         const st = r && r.status;
         if (st && st.state === 'connected' && st.ssid === ssid) {
-          done('在「' + ssid + '」上找到小车了（' + (st.ip || u) + '），正在跳转…');
+          done('Found the car on "' + ssid + '" (' + (st.ip || u) + '), opening the dashboard…');
           location.href = (u === here ? here : u) + '/';
           return;
         }
@@ -597,11 +644,11 @@ function watch(targets, ssid) {
       if (secs > 6 && !targets.includes(here)) {
         const r = await probeCar(here, 3000);
         const a = r && r.attempt;
-        if (a && a.ssid === ssid && a.state === 'failed') { done('连接失败：' + (a.reason || '') + '。可以关闭这个窗口重试。'); return; }
+        if (a && a.ssid === ssid && a.state === 'failed') { done('Failed: ' + (a.reason || '') + '. Close this window and try again.'); return; }
       }
       $('nw-ov-status').textContent = secs > 180
-        ? '3 分钟还没找到小车：看 OLED 小屏上的 IP，或者重新连 ROSMASTER 热点检查。'
-        : '正在寻找小车… ' + secs + ' 秒（在：' + targets.map((u) => u.replace('http://', '')).join('、') + '）';
+        ? 'Still no car after 3 minutes: check the IP on its OLED screen, or join the ROSMASTER hotspot to look.'
+        : 'Looking for the car… ' + secs + ' s (at ' + targets.map((u) => u.replace('http://', '')).join(', ') + ')';
     } finally { busy = false; }
   }, 2000);
 }
