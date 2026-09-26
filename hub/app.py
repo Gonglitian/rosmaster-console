@@ -18,6 +18,7 @@ import tornado.websocket
 
 from . import config, sysinfo
 from .arbiter import Arbiter
+from .battery import BatteryEstimator
 from .camera import Camera
 from .sensors import SensorManager
 
@@ -34,7 +35,9 @@ class Hub(object):
         self.arbiter = Arbiter(config.MAX_LINEAR, config.MAX_ANGULAR, config.MAX_LINEAR_ACCEL,
                                config.MAX_ANGULAR_ACCEL, config.SOURCE_TIMEOUT)
         self.camera = Camera(loop, config.CAMERA_DEVICE, config.CAMERA_SIZE)
-        self.bridge = bridge_factory(loop, config.CMD_TOPIC, self._on_scan, self._on_odom)
+        self.battery = BatteryEstimator()
+        self.bridge = bridge_factory(loop, config.CMD_TOPIC, self._on_scan, self._on_odom,
+                                     self._on_voltage)
         self.sensors = SensorManager(loop, self.bridge, self.camera, self.push_state)
         self.last_odom = None
         self._sys = sysinfo.snapshot()
@@ -121,6 +124,10 @@ class Hub(object):
         self.last_odom = payload
         self.broadcast(payload)
 
+    def _on_voltage(self, volts):
+        moving = any(abs(v) > 1e-3 for v in self.arbiter.output)
+        self.battery.update(volts, time.time(), moving)
+
     # ---- periodic ---------------------------------------------------------
     def _publish(self, vx, vy, wz):
         try:
@@ -140,6 +147,7 @@ class Hub(object):
             'sensors': self.sensors.snapshot(),
             'topics': self.bridge.topic_status(),
             'battery_v': self.bridge.voltage,
+            'battery': self.battery.snapshot(time.time()),
             'clients': len(self.clients),
             'uptime': round(time.time() - self.started),
             'sys': self._sys,
@@ -165,9 +173,17 @@ class Hub(object):
             if n % int(config.STATE_HZ) == 0:
                 self.sensors.check_health()
                 self._check_idle()
+                self._check_battery_floor()
             if n % int(5 * config.STATE_HZ) == 0:
                 self._sys = await self.loop.run_in_executor(None, sysinfo.snapshot)
             self.broadcast(self.state())
+
+    def _check_battery_floor(self):
+        if self.battery.below_floor(time.time()) and not self.arbiter.estop:
+            log.warning('battery at or below 9.0 V: e-stop')
+            self.arbiter.trigger_estop('电池电压 ≤ 9.0 V，请立即充电')
+            self._publish(0.0, 0.0, 0.0)
+            self.push_state()
 
     def _check_idle(self):
         busy = self.clients or self.arbiter.active_policy is not None or not self.sensors.any_on()

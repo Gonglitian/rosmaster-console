@@ -9,7 +9,6 @@ const S = {
   input: { move: [0, 0], rot: 0, padMove: false, padRot: false, keys: new Set() },
   wasDriving: false,
 };
-const BAT_FULL = 12.6, BAT_EMPTY = 10.5;   // 3S lithium pack
 const MODE_TEXT = { idle: '空闲', manual: '手动', policy: 'policy' };
 const SENSOR_TEXT = { off: '关', starting: '启动中', on: '运行', error: '故障', stopping: '关闭中' };
 
@@ -56,13 +55,7 @@ function renderState() {
   $('estop-banner').classList.toggle('hidden', !c.estop);
   $('estop-reason').textContent = c.estop_reason ? '（' + c.estop_reason + '）' : '';
 
-  const v = st.battery_v, bat = $('battery');
-  if (v == null) { bat.textContent = '🔋 —'; bat.classList.remove('low'); }
-  else {
-    const pct = Math.max(0, Math.min(100, Math.round((v - BAT_EMPTY) / (BAT_FULL - BAT_EMPTY) * 100)));
-    bat.textContent = '🔋 ' + v.toFixed(1) + ' V · ' + pct + '%';
-    bat.classList.toggle('low', v < 10.8);
-  }
+  renderBattery(st.battery);
 
   let msg = '', bad = false;
   for (const btn of document.querySelectorAll('[data-sensor]')) {
@@ -102,6 +95,21 @@ function renderState() {
     sys.cpu_temp_c != null ? 'CPU ' + sys.cpu_temp_c + '°C' : null,
     'hub 运行 ' + fmtDur(st.uptime),
   ].filter(Boolean).join(' · ');
+}
+// Battery: the hub estimates percent from resting voltage (see hub/battery.py).
+const BAT_STATE = { resting: '', settling: '估算中', driving: '行驶中，保持读数' };
+function renderBattery(b) {
+  const el = $('battery');
+  el.classList.remove('low', 'warn');
+  if (!b || b.state === 'nodata') { el.textContent = '🔋 —'; el.title = '底盘关闭时没有电压数据'; return; }
+  const pct = b.pct == null ? '—' : '≈' + b.pct + '%';
+  const note = BAT_STATE[b.state] ? ' · ' + BAT_STATE[b.state] : '';
+  el.textContent = '🔋 ' + pct + ' · ' + b.v.toFixed(1) + ' V' + note;
+  const LEVEL = { warn: '电量低，尽快充电', critical: '电量很低，结束测试准备充电', stop: '已到 9.6 V 报警线，立即停车充电' };
+  el.title = (LEVEL[b.level] ? LEVEL[b.level] + '\n' : '') + '静止电压 ' + (b.v_rest == null ? '—' : b.v_rest.toFixed(2) + ' V') +
+    '，按 3S 三元锂曲线估算，0% = 9.6 V（Yahboom 报警点）。电池类型未确认。';
+  if (b.level === 'critical' || b.level === 'stop') el.classList.add('low');
+  else if (b.level === 'warn') el.classList.add('warn');
 }
 function fmtDur(s) { return s < 90 ? s + ' 秒' : s < 5400 ? Math.round(s / 60) + ' 分' : (s / 3600).toFixed(1) + ' 时'; }
 

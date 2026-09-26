@@ -53,11 +53,12 @@ def _yaw(q):
 
 
 class RosBridge(object):
-    def __init__(self, loop, cmd_topic, on_scan, on_odom):
+    def __init__(self, loop, cmd_topic, on_scan, on_odom, on_voltage=None):
         self.loop = loop
         self.cmd_topic = cmd_topic
         self.on_scan = on_scan
         self.on_odom = on_odom
+        self.on_voltage = on_voltage
         self.rates = {'scan': RateMeter(), 'odom': RateMeter(), 'voltage': RateMeter()}
         self.voltage = None
         self._seq = {'scan': 0, 'odom': 0}
@@ -151,6 +152,8 @@ class RosBridge(object):
     def _voltage_cb(self, msg):
         self.rates['voltage'].hit(time.time())
         self.voltage = round(msg.data, 2)
+        if self.on_voltage is not None:
+            self.loop.call_soon_threadsafe(self.on_voltage, msg.data)
 
     def topic_status(self):
         now = time.time()

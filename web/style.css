@@ -26,6 +26,7 @@ header .grow { flex: 1; }
 .chip.estop { background: var(--bad); color: #fff; }
 .stat { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
 .stat.low { color: var(--bad); }
+.stat.warn { color: var(--warn); }
 
 .estop { display: block; width: calc(100% - 32px); margin: 0 16px; padding: 12px;
   font-size: 20px; font-weight: 700; letter-spacing: 2px; color: #fff;
