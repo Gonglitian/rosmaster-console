@@ -2,7 +2,7 @@
 
 ## Development workflow
 
-All development happens on **tasl-l1** in `~/rosmaster-console`. It is a git repository (local only: see [Git](#git)). The car only ever receives copies.
+All development happens on **tasl-l1** in `~/rosmaster-console`. It is a git repository, also on GitHub (see [Git](#git)). The car only ever receives copies.
 
 ```
 edit on tasl-l1 ──► unit tests / test hub ──► git commit ──► scripts/deploy_car.sh ──► car restarts hub
@@ -108,8 +108,9 @@ Things that are designed and implemented but not yet confirmed on the real car. 
 
 ## Git
 
-- `~/rosmaster-console` on tasl-l1 is the only copy with history. `git log --oneline` gives the story, one commit per feature or fix.
-- There is **no remote yet**. Creating a GitHub repository and pushing to it is waiting for Litian's approval, so don't publish the code without asking.
+- `~/rosmaster-console` on tasl-l1 is the working copy. `git log --oneline` gives the story, one commit per feature or fix.
+- The repository is on GitHub, **private**: https://github.com/Gonglitian/rosmaster-console (`origin` in `~/rosmaster-console`). It stays private because the docs contain the car's lab default passwords. Ask Litian to add you as a collaborator.
+- Pushing from tasl-l1 needs GitHub credentials there. The old `gh` login on tasl-l1 has expired: run `gh auth login` with your own account, or push from your laptop instead.
 - For your own work, make a branch (`git switch -c <your-name>/<topic>`) and commit there.
 
 Litian also has the original design notes (in Chinese). These English documents supersede them.

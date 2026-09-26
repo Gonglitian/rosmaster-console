@@ -180,7 +180,7 @@ tests/      unit tests without ROS (arbiter, battery, Wi-Fi parsing)
 docs/       this documentation
 ```
 
-The repository lives on tasl-l1 at `~/rosmaster-console`, as a local git repository with no remote yet. The older research code is at `~/human-following` on tasl-l1 and is untouched by this project.
+The working copy lives on tasl-l1 at `~/rosmaster-console`; the repository is also on GitHub (private): https://github.com/Gonglitian/rosmaster-console. The older research code is at `~/human-following` on tasl-l1 and is untouched by this project.
 
 ## Design decisions
 
