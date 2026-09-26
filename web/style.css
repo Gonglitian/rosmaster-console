@@ -36,9 +36,8 @@ header .grow { flex: 1; }
 .banner.warn { background: #3a2e12; border-color: var(--warn); }
 .banner button { background: var(--warn); color: #1a1300; border: 0; font-weight: 600; }
 
-main { display: grid; gap: 12px; padding: 12px 16px; }
-@media (min-width: 900px) { main { grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); } }
-.col { display: grid; gap: 12px; align-content: start; min-width: 0; }
+main { display: grid; gap: 12px; padding: 12px 16px; grid-template-columns: minmax(0, 1fr); }
+.sensors-wrap { display: grid; gap: 6px; min-width: 0; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); }
 
 .view { position: relative; aspect-ratio: 1 / 1; max-height: 70vh; overflow: hidden; }
@@ -59,7 +58,7 @@ main { display: grid; gap: 12px; padding: 12px 16px; }
 .msg.bad { color: var(--bad); }
 
 .drive { padding: 12px; display: grid; gap: 10px; }
-.pads { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pads { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 460px; width: 100%; margin: 0 auto; }
 .pad { position: relative; aspect-ratio: 1 / 1; border-radius: 50%; background: #11151a;
   border: 1px solid var(--line); touch-action: none; user-select: none; -webkit-user-select: none; }
 .pad-rot { border-radius: 999px; aspect-ratio: auto; height: 38%; align-self: center; }
@@ -71,7 +70,7 @@ main { display: grid; gap: 12px; padding: 12px 16px; }
 .pad-rot .knob { width: auto; height: 86%; }
 .pad.active { border-color: var(--accent); } .pad.active .knob { background: var(--accent); border-color: var(--accent); }
 .pad.disabled { opacity: .35; }
-.slider { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.slider { display: grid; gap: 2px; font-size: 13px; color: var(--muted); }
 .slider input { width: 100%; }
 .slider output { color: var(--text); font-variant-numeric: tabular-nums; }
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -80,3 +79,11 @@ main { display: grid; gap: 12px; padding: 12px 16px; }
 .cmd { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 footer { padding: 6px 16px 16px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Desktop: lidar view on the left, controls on the right. Keep last so it wins. */
+@media (min-width: 900px) {
+  main { grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); align-items: start;
+    grid-template-areas: "view sensors" "view camera" "view drive" "view ."; }
+  .view { grid-area: view; aspect-ratio: auto; height: calc(100vh - 150px); max-height: none; }
+  .camera { grid-area: camera; } .sensors-wrap { grid-area: sensors; } .drive { grid-area: drive; }
+}

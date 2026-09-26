@@ -25,22 +25,21 @@
 <div id="offline" class="banner warn hidden">与小车的连接断开，正在重连…</div>
 
 <main>
-  <section class="col view-col">
-    <div class="card view">
-      <canvas id="topdown" aria-label="俯视图：小车在中心，前方朝上"></canvas>
-      <div class="view-tools">
-        <button type="button" data-range="2">2 m</button>
-        <button type="button" data-range="4" class="on">4 m</button>
-        <button type="button" data-range="8">8 m</button>
-      </div>
-      <div id="view-note" class="view-note"></div>
+  <div class="card view">
+    <canvas id="topdown" aria-label="俯视图：小车在中心，前方朝上"></canvas>
+    <div class="view-tools">
+      <button type="button" data-range="2">2 m</button>
+      <button type="button" data-range="4" class="on">4 m</button>
+      <button type="button" data-range="8">8 m</button>
     </div>
-    <div id="camera-card" class="card camera hidden">
-      <img id="cam" alt="相机画面">
-    </div>
-  </section>
+    <div id="view-note" class="view-note"></div>
+  </div>
 
-  <section class="col ctl-col">
+  <div id="camera-card" class="card camera hidden">
+    <img id="cam" alt="相机画面">
+  </div>
+
+  <div class="sensors-wrap">
     <div class="card sensors">
       <button type="button" class="sensor" data-sensor="base"><b>底盘</b><span>关</span></button>
       <button type="button" class="sensor" data-sensor="lidar"><b>雷达</b><span>关</span></button>
@@ -48,23 +47,23 @@
       <button type="button" id="beep" class="sensor small"><b>鸣笛</b><span>找车</span></button>
     </div>
     <div id="sensor-msg" class="msg"></div>
+  </div>
 
-    <div class="card drive">
-      <div class="pads">
-        <div class="pad" id="pad-move" aria-label="平移摇杆：上前、下后、左右平移"><div class="knob"></div><span>平移</span></div>
-        <div class="pad pad-rot" id="pad-rot" aria-label="旋转：左拖左转，右拖右转"><div class="knob"></div><span>旋转</span></div>
-      </div>
-      <label class="slider">线速度上限 <output id="vmax-out">0.30</output> m/s
-        <input id="vmax" type="range" min="0.05" max="0.7" step="0.05" value="0.3"></label>
-      <label class="slider">角速度上限 <output id="wmax-out">0.8</output> rad/s
-        <input id="wmax" type="range" min="0.2" max="1.5" step="0.1" value="0.8"></label>
-      <div class="row">
-        <button type="button" id="hand-back" disabled>退出手动</button>
-        <span class="hint">电脑键盘：W/S 前后，A/D 平移，Q/E 旋转，Esc 急停</span>
-      </div>
-      <div id="cmd" class="cmd">输出 vx 0.00 · vy 0.00 · ω 0.00</div>
+  <div class="card drive">
+    <div class="pads">
+      <div class="pad" id="pad-move" aria-label="平移摇杆：上前、下后、左右平移"><div class="knob"></div><span>平移</span></div>
+      <div class="pad pad-rot" id="pad-rot" aria-label="旋转：左拖左转，右拖右转"><div class="knob"></div><span>旋转</span></div>
     </div>
-  </section>
+    <label class="slider"><span>线速度上限 <output id="vmax-out">0.30</output> m/s</span>
+      <input id="vmax" type="range" min="0.05" max="0.7" step="0.05" value="0.3"></label>
+    <label class="slider"><span>角速度上限 <output id="wmax-out">0.8</output> rad/s</span>
+      <input id="wmax" type="range" min="0.2" max="1.5" step="0.1" value="0.8"></label>
+    <div class="row">
+      <button type="button" id="hand-back" disabled>退出手动</button>
+      <span class="hint">电脑键盘：W/S 前后，A/D 平移，Q/E 旋转，Esc 急停</span>
+    </div>
+    <div id="cmd" class="cmd">输出 vx 0.00 · vy 0.00 · ω 0.00</div>
+  </div>
 </main>
 
 <footer id="info">—</footer>
