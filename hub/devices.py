@@ -37,22 +37,24 @@ class LidarMotor(object):
         self.ser = None
 
     def stop(self):
-        """Motor off. Blocking; safe to repeat."""
-        try:
-            if self.ser is None or not self.ser.is_open:
-                import serial
-                s = serial.Serial()
-                s.port, s.baudrate, s.timeout = self.dev, 115200, 0
-                s.dtr = True
-                s.open()
-                self.ser = s
-            self.ser.dtr = True
-            log.info('lidar motor stopped (holding %s with DTR asserted)', self.dev)
-            return True
-        except Exception as e:  # device missing, CP2102 refusing the DTR request, ...
-            log.warning('could not stop lidar motor: %s', e)
-            self.release()
-            return False
+        """Motor off. Blocking; safe to repeat. A handle left over from before the
+        USB device re-enumerated fails with EBADF/EIO; then retry with a new one."""
+        for attempt in (1, 2):
+            try:
+                if self.ser is None or not self.ser.is_open:
+                    import serial
+                    s = serial.Serial()
+                    s.port, s.baudrate, s.timeout = self.dev, 115200, 0
+                    s.dtr = True
+                    s.open()
+                    self.ser = s
+                self.ser.dtr = True
+                log.info('lidar motor stopped (holding %s with DTR asserted)', self.dev)
+                return True
+            except Exception as e:  # stale handle, device missing, CP2102 refusing DTR
+                log.warning('could not stop lidar motor (try %d): %s', attempt, e)
+                self.release()
+        return False
 
     def release(self):
         """Close the port: the motor starts and sllidar_node can have the port."""
