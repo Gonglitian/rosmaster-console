@@ -13,7 +13,9 @@ How the car picks a network (NetworkManager autoconnect priority):
 Only open and WPA/WPA2-Personal networks are supported (no 802.1X/enterprise).
 Passwords are passed to nmcli and never logged or returned.
 """
+import json
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -23,6 +25,10 @@ log = logging.getLogger('hub.wifi')
 IFACE = 'wlan0'
 HOTSPOT = 'ROSMASTER'          # NetworkManager profile name of the car's own hotspot
 NEW_PRIORITY = 60
+# IP the car got on each network, so a page that switches the car can look for it
+# at that address when the new network blocks mDNS (rosmaster.local). Kept outside
+# the deployed files (deploy_car.sh rsyncs with --delete; .state is excluded).
+IP_BOOK = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.state', 'wifi_ips.json')
 
 
 def _split(line):
@@ -129,6 +135,25 @@ class WifiManager(object):
         self.scan_error = None
         self.attempt = None       # {'ssid', 'state': connecting/connected/failed, 'reason', 'time'}
         self._lock = threading.Lock()
+        self.ip_by_ssid = self._load_ips()
+
+    def _load_ips(self):
+        try:
+            with open(IP_BOOK) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def _note_ip(self, st):
+        if st.get('state') == 'connected' and st.get('mode') != 'ap' and st.get('ssid') and st.get('ip'):
+            if self.ip_by_ssid.get(st['ssid']) != st['ip']:
+                self.ip_by_ssid[st['ssid']] = st['ip']
+                try:
+                    os.makedirs(os.path.dirname(IP_BOOK), exist_ok=True)
+                    with open(IP_BOOK, 'w') as f:
+                        json.dump(self.ip_by_ssid, f)
+                except OSError:
+                    log.warning('could not save %s', IP_BOOK)
 
     def refresh_scan(self, rescan=True):
         try:
@@ -140,9 +165,19 @@ class WifiManager(object):
             log.warning('wifi scan failed: %s', e)
         return self.last_scan
 
+    def where(self):
+        """Cheap answer to 'which network is the car on?' for pages probing for it."""
+        try:
+            st = status()
+            self._note_ip(st)
+        except Exception as e:
+            st = {'state': 'unknown', 'error': str(e)}
+        return {'status': st, 'attempt': self.attempt}
+
     def report(self):
         try:
             st = status()
+            self._note_ip(st)
         except Exception as e:
             st = {'state': 'unknown', 'error': str(e)}
         try:
@@ -151,7 +186,8 @@ class WifiManager(object):
             prof = []
         return {'status': st, 'saved': prof, 'scan': self.last_scan,
                 'scan_time': self.last_scan_time, 'scan_error': self.scan_error,
-                'attempt': self.attempt, 'hotspot_profile': HOTSPOT, 'new_priority': NEW_PRIORITY}
+                'attempt': self.attempt, 'hotspot_profile': HOTSPOT, 'new_priority': NEW_PRIORITY,
+                'ip_by_ssid': self.ip_by_ssid}
 
     def connect(self, ssid, password=None):
         """Validate, then switch in the background so the HTTP reply gets out first
@@ -212,6 +248,7 @@ class WifiManager(object):
             rc, _, err = _nmcli(['--wait', '45', 'con', 'up', 'id', name], timeout=60)
             if rc == 0:
                 st = status()
+                self._note_ip(st)
                 self.attempt = {'ssid': ssid, 'state': 'connected', 'reason': None,
                                 'ip': st.get('ip'), 'time': time.time()}
                 log.info('Wi-Fi now %r, ip %s', ssid, st.get('ip'))

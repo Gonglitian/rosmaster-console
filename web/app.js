@@ -556,44 +556,62 @@ async function startConnect(ssid, pw) {
     '<ol><li>小车切换网络大约要 10–45 秒。</li><li>如果你现在是通过 ROSMASTER 热点连着小车，热点会消失、连接会断开，这是正常的。</li>' +
     '<li>把这台电脑或手机也连到「' + esc(ssid) + '」。</li><li>这个页面会自动跳到 http://rosmaster.local:8080。一直没跳的话，看小车 OLED 小屏上的 IP，打开 http://那个IP:8080。</li>' +
     '<li>如果密码错了，小车会回到原来的网络；如果原来的网络也不在附近，它会自己开热点 ROSMASTER，重新连上热点再试。</li></ol>');
-  watch(['http://rosmaster.local:8080'], ssid);
+  watch(targetsFor(ssid), ssid);
 }
 function showOverlay(title, body) {
   $('nw-ov-title').textContent = title; $('nw-ov-body').innerHTML = body; $('nw-ov-status').textContent = '';
   $('nw-overlay').classList.remove('hidden');
 }
 $('nw-ov-close').addEventListener('click', () => { $('nw-overlay').classList.add('hidden'); if (NW.watcher) clearInterval(NW.watcher); NW.watcher = null; loadWifi(); });
-function reachable(url) {
-  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 1500);
-  return fetch(url + '/api/state?probe=' + Date.now(), { mode: 'no-cors', cache: 'no-store', signal: ctl.signal })
-    .then(() => true, () => false).finally(() => clearTimeout(t));
+// Ask the car at `base` which network it is on. /api/net allows cross-origin
+// reads (and is fast: no listing of saved networks), so this works from the page's old address. Short timeout: a dead
+// address must never block the next probe.
+async function probeCar(base, ms) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms || 4000);
+  try {
+    const r = await fetch(base + '/api/net', { cache: 'no-store', signal: ctl.signal });
+    return r.ok ? await r.json() : null;
+  } catch (e) { return null; } finally { clearTimeout(t); }
 }
 function watch(targets, ssid) {
   if (NW.watcher) clearInterval(NW.watcher);
   const t0 = Date.now(), here = location.origin;
+  let busy = false;
+  const done = (msg) => { clearInterval(NW.watcher); NW.watcher = null; if (msg) $('nw-ov-status').textContent = msg; };
   NW.watcher = setInterval(async () => {
-    const secs = Math.round((Date.now() - t0) / 1000);
-    // 1) Still reachable at this address? Then the switch either failed or kept us on the same network.
-    if (secs > 6) {
-      try {
-        const r = await api('/api/wifi');
-        const a = r.attempt || {};
-        if (a.ssid === ssid && a.state === 'failed') { $('nw-ov-status').textContent = '连接失败：' + (a.reason || '') + '。可以关闭这个窗口重试。'; clearInterval(NW.watcher); NW.watcher = null; return; }
-        if (a.ssid === ssid && a.state === 'connected') {
-          $('nw-ov-status').textContent = '小车已连上「' + ssid + '」，IP ' + (a.ip || '—') + '。';
-          // This page's own address works on the new network (e.g. rosmaster.local): just reload.
-          if (targets.includes(here)) { clearInterval(NW.watcher); NW.watcher = null; setTimeout(() => location.reload(), 1500); return; }
+    if (busy) return;
+    busy = true;
+    try {
+      const secs = Math.round((Date.now() - t0) / 1000);
+      // 1) Is the car answering at a new-network address, and on the target network?
+      for (const u of targets) {
+        const r = await probeCar(u, 4000);
+        const st = r && r.status;
+        if (st && st.state === 'connected' && st.ssid === ssid) {
+          done('在「' + ssid + '」上找到小车了（' + (st.ip || u) + '），正在跳转…');
+          location.href = (u === here ? here : u) + '/';
+          return;
         }
-      } catch (e) { /* not reachable here any more: expected after a switch */ }
-    }
-    // 2) Reachable at the new address? Go there.
-    for (const u of targets) {
-      if (u === here) continue;
-      if (await reachable(u)) { $('nw-ov-status').textContent = '在新网络上找到小车了，正在跳转…'; clearInterval(NW.watcher); location.href = u + '/'; return; }
-    }
-    if (!$('nw-ov-status').textContent.startsWith('小车已连上')) $('nw-ov-status').textContent = '等待中… ' + secs + ' 秒';
-    if (secs > 180) $('nw-ov-status').textContent = '3 分钟还没找到小车：看 OLED 小屏上的 IP，或者重新连 ROSMASTER 热点检查。';
+      }
+      // 2) Still answering at this page's address? Then the switch failed and the car came back.
+      if (secs > 6 && !targets.includes(here)) {
+        const r = await probeCar(here, 3000);
+        const a = r && r.attempt;
+        if (a && a.ssid === ssid && a.state === 'failed') { done('连接失败：' + (a.reason || '') + '。可以关闭这个窗口重试。'); return; }
+      }
+      $('nw-ov-status').textContent = secs > 180
+        ? '3 分钟还没找到小车：看 OLED 小屏上的 IP，或者重新连 ROSMASTER 热点检查。'
+        : '正在寻找小车… ' + secs + ' 秒（在：' + targets.map((u) => u.replace('http://', '')).join('、') + '）';
+    } finally { busy = false; }
   }, 2000);
+}
+// Where to look for the car once it has joined `ssid`: its mDNS name, plus the IP it
+// had last time on that network (for networks that block mDNS).
+function targetsFor(ssid) {
+  const out = ['http://rosmaster.local:8080'];
+  const ip = NW.report && NW.report.ip_by_ssid && NW.report.ip_by_ssid[ssid];
+  if (ip) out.push('http://' + ip + ':8080');
+  return out;
 }
 
 showTab(load('tab', 'drive'));

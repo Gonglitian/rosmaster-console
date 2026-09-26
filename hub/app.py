@@ -335,6 +335,9 @@ class WifiHandler(tornado.web.RequestHandler):
         self.write(json.dumps(obj))
 
     async def get(self, action=None):
+        # Readable cross-origin, so a page loaded from the car's old address can
+        # confirm the car is on the new network before jumping there.
+        self.set_header('Access-Control-Allow-Origin', '*')
         loop = self.hub.loop
         self._json(await loop.run_in_executor(None, self.hub.wifi.report))
 
@@ -364,6 +367,19 @@ class WifiHandler(tornado.web.RequestHandler):
         self._json(await loop.run_in_executor(None, wifi.report))
 
 
+class NetHandler(tornado.web.RequestHandler):
+    """GET /api/net: which network the car is on (fast; readable cross-origin)."""
+
+    def initialize(self, hub):
+        self.hub = hub
+
+    async def get(self):
+        self.set_header('Access-Control-Allow-Origin', '*')
+        self.set_header('Content-Type', 'application/json')
+        self.set_header('Cache-Control', 'no-cache')
+        self.write(json.dumps(await self.hub.loop.run_in_executor(None, self.hub.wifi.where)))
+
+
 class NoCacheStatic(tornado.web.StaticFileHandler):
     def set_extra_headers(self, path):
         self.set_header('Cache-Control', 'no-cache')
@@ -376,6 +392,7 @@ def make_app(hub):
         (r'/api/state', StateHandler, {'hub': hub}),
         (r'/api/battery', BatteryHandler, {'hub': hub}),
         (r'/api/wifi', WifiHandler, {'hub': hub}),
+        (r'/api/net', NetHandler, {'hub': hub}),
         (r'/api/wifi/(scan|connect|hotspot|forget)', WifiHandler, {'hub': hub}),
         (r'/(.*)', NoCacheStatic, {'path': config.WEB_DIR, 'default_filename': 'index.html'}),
     ], websocket_ping_interval=5, websocket_ping_timeout=15)

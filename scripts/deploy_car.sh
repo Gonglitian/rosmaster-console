@@ -5,7 +5,7 @@
 set -euo pipefail
 CAR="${CAR:-pi@rosmaster.local}"
 cd "$(dirname "$0")/.."
-rsync -a --delete --exclude .git --exclude __pycache__ --exclude '*.pyc' ./ "$CAR":rosmaster-console/
+rsync -a --delete --exclude .git --exclude .state --exclude __pycache__ --exclude '*.pyc' ./ "$CAR":rosmaster-console/
 if [ "${1:-}" = "--install" ]; then
   ssh "$CAR" 'bash rosmaster-console/car/install_hub.sh'
 else
