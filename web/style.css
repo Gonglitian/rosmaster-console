@@ -125,6 +125,38 @@ footer { padding: 6px 16px 16px; font-size: 12px; color: var(--muted); font-vari
   .bat-hero, .bat-chart, .bat-method { grid-column: 1 / -1; }
 }
 
+/* Network page */
+.net-page { grid-template-columns: minmax(0, 1fr); }
+.net-page .card { padding: 14px 16px; }
+.net-page h3 { margin: 0 0 8px; font-size: 15px; }
+.row.between { justify-content: space-between; }
+.nw-now { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 14px; margin-bottom: 10px; }
+.nw-now dt { color: var(--muted); } .nw-now dd { margin: 0; overflow-wrap: anywhere; }
+.nw-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.nw-item { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: grid; gap: 6px; }
+.nw-item .top { display: flex; align-items: center; gap: 8px; }
+.nw-item .name { font-weight: 600; flex: 1; overflow-wrap: anywhere; }
+.nw-item .meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.nw-tag { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: #252b35; color: var(--muted); }
+.nw-tag.use { background: #1d4535; color: #b8f0d5; }
+.nw-bars { display: inline-flex; gap: 2px; align-items: flex-end; height: 12px; }
+.nw-bars i { width: 3px; background: #3a4350; border-radius: 1px; }
+.nw-bars i.on { background: var(--ok); }
+.nw-form { display: flex; flex-wrap: wrap; gap: 8px; }
+.nw-form input { flex: 1 1 160px; min-width: 0; font: inherit; color: var(--text); background: #11151a;
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.nw-manual { margin-top: 10px; font-size: 14px; }
+.nw-manual summary { cursor: pointer; color: var(--muted); margin-bottom: 8px; }
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 20; display: flex;
+  align-items: center; justify-content: center; padding: 16px; }
+.overlay-card { max-width: 520px; width: 100%; padding: 16px 18px; display: grid; gap: 10px; }
+.overlay-card h3 { margin: 0; }
+.overlay-card ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 14px; }
+@media (min-width: 900px) {
+  .net-page { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .net-scan { grid-row: span 2; }
+}
+
 /* Desktop: lidar view on the left, controls on the right. Keep last so it wins. */
 @media (min-width: 900px) {
   #tab-drive { grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); align-items: start;

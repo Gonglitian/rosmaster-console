@@ -28,6 +28,7 @@ docker rm -f rc-hub >/dev/null 2>&1 || true
 docker run -d --name rc-hub --init --restart unless-stopped --stop-timeout 25 \
   --privileged --network host \
   -v /dev:/dev -v "$REPO":/opt/rc \
+  -v /run/dbus:/run/dbus \
   --tmpfs /tmp:size=64m \
   -e TZ=America/Los_Angeles -e ROS_DOMAIN_ID=32 \
   rc-hub:latest /opt/rc/car/entrypoint.sh

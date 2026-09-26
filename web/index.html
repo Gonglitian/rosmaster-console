@@ -23,6 +23,7 @@
 <nav class="tabs" role="tablist">
   <button type="button" role="tab" data-tab="drive" class="on">控制</button>
   <button type="button" role="tab" data-tab="battery">电量</button>
+  <button type="button" role="tab" data-tab="net">网络</button>
 </nav>
 </div>
 <div id="estop-banner" class="banner hidden">
@@ -125,6 +126,56 @@
     </ul>
   </section>
 </main>
+
+<main id="tab-net" class="net-page hidden">
+  <section class="card net-now">
+    <h3>当前网络</h3>
+    <div id="nw-now" class="nw-now">—</div>
+    <div class="row">
+      <button type="button" id="nw-hotspot">切换到小车热点</button>
+      <span class="hint" id="nw-hotspot-hint">小车离开当前网络、开自己的热点 ROSMASTER</span>
+    </div>
+  </section>
+
+  <section class="card net-scan">
+    <div class="row between"><h3>附近的 Wi-Fi</h3><button type="button" id="nw-scan">扫描</button></div>
+    <div id="nw-scan-note" class="note"></div>
+    <ul id="nw-list" class="nw-list"></ul>
+    <details class="nw-manual">
+      <summary>手动输入网络名（隐藏网络，或扫描不到时）</summary>
+      <div class="nw-form">
+        <input id="nw-ssid" placeholder="网络名（SSID）" autocomplete="off" autocapitalize="none">
+        <input id="nw-pass" type="password" placeholder="密码（开放网络留空）" autocomplete="off">
+        <button type="button" id="nw-manual-go">连接</button>
+      </div>
+    </details>
+  </section>
+
+  <section class="card net-saved">
+    <h3>已保存的网络</h3>
+    <ul id="nw-saved" class="nw-list"></ul>
+    <p class="note">几个已保存的网络同时在附近时，小车连优先级最高的。小车自己的热点优先级是 50，而且永远算作"可用"，所以附近没有更高优先级的网络时，小车会自动开热点。在这里添加或重新输入过密码的网络，优先级设为 60。</p>
+  </section>
+
+  <section class="card net-help">
+    <h3>换地方时怎么连</h3>
+    <ul>
+      <li><b>小车和电脑能连同一个 Wi-Fi：</b>在这页选那个 Wi-Fi、输入密码。小车切过去以后，把电脑也连过去，这页会自动跳到 http://rosmaster.local:8080。</li>
+      <li><b>到了没有已知网络的地方：</b>小车开机后会自动开热点 ROSMASTER（密码 12345678）。电脑连上它，打开 http://192.168.1.11:8080 或 http://rosmaster.local:8080，再到这页配网。</li>
+      <li><b>rosmaster.local 打不开：</b>有些校园网或公司网禁止设备互相发现（mDNS），甚至禁止设备互访。这时看小车 OLED 小屏上的 IP，用 http://那个IP:8080；如果连 IP 也访问不了，说明这个网络禁止设备互访，只能用小车热点。</li>
+      <li>只支持开放网络和 WPA/WPA2 个人网络；UCR-SECURE 这类要账号登录的企业网络不支持。</li>
+    </ul>
+  </section>
+</main>
+
+<div id="nw-overlay" class="overlay hidden" role="dialog" aria-modal="true">
+  <div class="card overlay-card">
+    <h3 id="nw-ov-title">—</h3>
+    <div id="nw-ov-body"></div>
+    <div id="nw-ov-status" class="note"></div>
+    <div class="row"><button type="button" id="nw-ov-close">关闭</button></div>
+  </div>
+</div>
 
 <footer id="info">—</footer>
 <script src="app.js"></script>

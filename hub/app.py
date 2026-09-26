@@ -22,6 +22,7 @@ from .battery import BatteryEstimator, NMC_TABLE, WARN_V, CRITICAL_V, STOP_V, FL
 from .battery_reader import BatteryReader
 from .camera import Camera
 from .sensors import SensorManager
+from .wifi import WifiManager
 
 log = logging.getLogger('hub')
 VERSION = '0.1.0'
@@ -41,6 +42,7 @@ class Hub(object):
                                      self._on_voltage)
         self.sensors = SensorManager(loop, self.bridge, self.camera, self.push_state)
         self.voltage_source = None
+        self.wifi = WifiManager()
         self.sensors.reader = BatteryReader(loop, self._on_monitor_voltage)
         self.last_odom = None
         self._sys = sysinfo.snapshot()
@@ -319,6 +321,49 @@ class BatteryHandler(tornado.web.RequestHandler):
         self.write(json.dumps(self.hub.battery_report()))
 
 
+class WifiHandler(tornado.web.RequestHandler):
+    """GET /api/wifi, POST /api/wifi/{scan,connect,hotspot,forget}. Wi-Fi setup for a
+    car with no keyboard; usable over the car's own hotspot (192.168.1.11:8080)."""
+
+    def initialize(self, hub):
+        self.hub = hub
+
+    def _json(self, obj, code=200):
+        self.set_status(code)
+        self.set_header('Content-Type', 'application/json')
+        self.set_header('Cache-Control', 'no-cache')
+        self.write(json.dumps(obj))
+
+    async def get(self, action=None):
+        loop = self.hub.loop
+        self._json(await loop.run_in_executor(None, self.hub.wifi.report))
+
+    async def post(self, action):
+        wifi, loop = self.hub.wifi, self.hub.loop
+        try:
+            body = json.loads(self.request.body or b'{}')
+        except ValueError:
+            body = {}
+        try:
+            if action == 'scan':
+                await loop.run_in_executor(None, wifi.refresh_scan, True)
+            elif action == 'connect':
+                if not wifi.last_scan:
+                    await loop.run_in_executor(None, wifi.refresh_scan, False)
+                wifi.connect(body.get('ssid'), body.get('password') or None)
+                log.warning('Wi-Fi switch to %r requested from %s', body.get('ssid'), self.request.remote_ip)
+            elif action == 'hotspot':
+                wifi.hotspot()
+                log.warning('hotspot requested from %s', self.request.remote_ip)
+            elif action == 'forget':
+                await loop.run_in_executor(None, wifi.forget, body.get('name'))
+            else:
+                return self._json({'error': 'unknown action'}, 404)
+        except (ValueError, RuntimeError) as e:
+            return self._json({'error': str(e)}, 400)
+        self._json(await loop.run_in_executor(None, wifi.report))
+
+
 class NoCacheStatic(tornado.web.StaticFileHandler):
     def set_extra_headers(self, path):
         self.set_header('Cache-Control', 'no-cache')
@@ -330,5 +375,7 @@ def make_app(hub):
         (r'/camera.mjpg', MjpegHandler, {'hub': hub}),
         (r'/api/state', StateHandler, {'hub': hub}),
         (r'/api/battery', BatteryHandler, {'hub': hub}),
+        (r'/api/wifi', WifiHandler, {'hub': hub}),
+        (r'/api/wifi/(scan|connect|hotspot|forget)', WifiHandler, {'hub': hub}),
         (r'/(.*)', NoCacheStatic, {'path': config.WEB_DIR, 'default_filename': 'index.html'}),
     ], websocket_ping_interval=5, websocket_ping_timeout=15)

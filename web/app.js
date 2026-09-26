@@ -288,13 +288,15 @@ function draw() {
 }
 
 // ---------- tabs ----------
+const TABS = ['drive', 'battery', 'net'];
 function showTab(name) {
+  if (!TABS.includes(name)) name = 'drive';
   for (const b of document.querySelectorAll('[data-tab]')) b.classList.toggle('on', b.dataset.tab === name);
-  $('tab-drive').classList.toggle('hidden', name !== 'drive');
-  $('tab-battery').classList.toggle('hidden', name !== 'battery');
+  for (const t of TABS) $('tab-' + t).classList.toggle('hidden', t !== name);
   store('tab', name);
   S.dirty = true;
   if (name === 'battery') { fetchBattery(); if (S.state) renderBatteryPage(S.state); }
+  if (name === 'net') loadWifi();
 }
 for (const b of document.querySelectorAll('[data-tab]')) b.addEventListener('click', () => showTab(b.dataset.tab));
 $('battery').addEventListener('click', () => showTab('battery'));
@@ -464,4 +466,134 @@ window.addEventListener('resize', () => { if (batteryVisible()) drawBatteryChart
 
 connect();
 requestAnimationFrame(draw);
-showTab(load('tab', 'drive') === 'battery' ? 'battery' : 'drive');
+// ---------- network page (Wi-Fi setup; the car has no keyboard) ----------
+const NW = { report: null, openForm: null, watcher: null, hotspotArmed: 0 };
+const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+async function api(path, body) {
+  const opt = body === undefined ? { cache: 'no-store' } : { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } };
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+async function loadWifi() {
+  try { NW.report = await api('/api/wifi'); renderWifi(); } catch (e) { $('nw-now').textContent = '读取网络状态失败：' + e.message; }
+}
+function bars(sig) {
+  const n = sig >= 75 ? 4 : sig >= 55 ? 3 : sig >= 35 ? 2 : 1;
+  return '<span class="nw-bars" title="信号 ' + sig + '%">' + [4, 7, 10, 12].map((h, i) => '<i class="' + (i < n ? 'on' : '') + '" style="height:' + h + 'px"></i>').join('') + '</span>';
+}
+function renderWifi() {
+  const r = NW.report; if (!r) return;
+  const st = r.status || {};
+  const host = location.hostname;
+  const addr = st.ip ? 'http://' + st.ip + ':8080' : '—';
+  $('nw-now').innerHTML = '<dt>模式</dt><dd>' + (st.hotspot ? '小车热点（' + esc(st.ssid) + '，密码 12345678）' : st.state === 'connected' ? '已连接 Wi-Fi' : esc(st.state || '—')) + '</dd>' +
+    (st.hotspot ? '' : '<dt>网络</dt><dd>' + esc(st.ssid || '—') + '</dd>') +
+    '<dt>小车 IP</dt><dd>' + esc(st.ip || '—') + '</dd>' +
+    '<dt>面板地址</dt><dd>http://rosmaster.local:8080　或　' + esc(addr) + '</dd>';
+  $('nw-hotspot').disabled = !!st.hotspot;
+  // scan list
+  const note = r.scan_error ? '扫描失败：' + esc(r.scan_error) + '（小车开热点时可能扫不了，可以手动输入网络名）'
+    : r.scan_time ? '上次扫描：' + Math.round(Date.now() / 1000 - r.scan_time) + ' 秒前（扫描时 Wi-Fi 会有零点几秒的延迟抖动，开车时别频繁点）' : '还没扫描，点右上角「扫描」。';
+  $('nw-scan-note').innerHTML = note;
+  $('nw-list').innerHTML = (r.scan || []).map((n) => {
+    const open = NW.openForm === n.ssid;
+    const tags = (n.in_use ? '<span class="nw-tag use">正在使用</span>' : '') + (n.known ? '<span class="nw-tag">已保存</span>' : '');
+    const lock = n.security ? '🔒 ' + esc(n.security) : '开放';
+    return '<li class="nw-item"><div class="top"><span class="name">' + esc(n.ssid) + '</span>' + tags +
+      '<span class="meta">' + bars(n.signal) + ' ' + n.band + ' · ' + lock + '</span>' +
+      (n.in_use ? '' : '<button type="button" data-connect="' + esc(n.ssid) + '">' + (open ? '取消' : '连接') + '</button>') + '</div>' +
+      (open ? '<div class="nw-form">' + (n.security ? '<input type="password" id="nw-inline-pass" placeholder="' + (n.known ? '已保存密码，可留空' : 'Wi-Fi 密码') + '" autocomplete="off">' : '') +
+        '<button type="button" data-go="' + esc(n.ssid) + '" data-secured="' + (n.security ? 1 : 0) + '" data-known="' + (n.known ? 1 : 0) + '">连接到这个网络</button></div>' : '') + '</li>';
+  }).join('');
+  // saved list
+  $('nw-saved').innerHTML = (r.saved || []).map((p) => {
+    const using = st.connection === p.name;
+    const tag = p.mode === 'ap' ? '<span class="nw-tag">小车热点</span>' : using ? '<span class="nw-tag use">正在使用</span>' : '';
+    const del = p.mode === 'ap' || using ? '' : '<button type="button" data-forget="' + esc(p.name) + '">删除</button>';
+    return '<li class="nw-item"><div class="top"><span class="name">' + esc(p.name) + (p.ssid && p.ssid !== p.name ? '（' + esc(p.ssid) + '）' : '') + '</span>' + tag +
+      '<span class="meta">优先级 ' + p.priority + '</span>' + del + '</div></li>';
+  }).join('');
+}
+$('nw-scan').addEventListener('click', async () => {
+  const b = $('nw-scan'); b.disabled = true; b.textContent = '扫描中…';
+  try { NW.report = await api('/api/wifi/scan', {}); renderWifi(); } catch (e) { $('nw-scan-note').textContent = '扫描失败：' + e.message; }
+  b.disabled = false; b.textContent = '扫描';
+});
+$('nw-list').addEventListener('click', (e) => {
+  const c = e.target.closest('[data-connect]'), g = e.target.closest('[data-go]');
+  if (c) { NW.openForm = NW.openForm === c.dataset.connect ? null : c.dataset.connect; renderWifi(); const i = $('nw-inline-pass'); if (i) i.focus(); }
+  if (g) {
+    const pw = $('nw-inline-pass') ? $('nw-inline-pass').value : '';
+    if (g.dataset.secured === '1' && g.dataset.known !== '1' && pw.length < 8) { $('nw-scan-note').textContent = '请输入密码（至少 8 位）'; return; }
+    startConnect(g.dataset.go, pw);
+  }
+});
+$('nw-manual-go').addEventListener('click', () => {
+  const ssid = $('nw-ssid').value.trim(), pw = $('nw-pass').value;
+  if (!ssid) { $('nw-ssid').focus(); return; }
+  startConnect(ssid, pw);
+});
+$('nw-saved').addEventListener('click', async (e) => {
+  const f = e.target.closest('[data-forget]'); if (!f) return;
+  if (f.dataset.armed !== '1') { f.dataset.armed = '1'; f.textContent = '再点一次确认删除'; return; }
+  try { NW.report = await api('/api/wifi/forget', { name: f.dataset.forget }); renderWifi(); } catch (err) { alertLine(err.message); }
+});
+$('nw-hotspot').addEventListener('click', async () => {
+  const b = $('nw-hotspot');
+  if (Date.now() - NW.hotspotArmed > 4000) { NW.hotspotArmed = Date.now(); b.textContent = '再点一次确认（当前网络上的面板会断开）'; setTimeout(() => { b.textContent = '切换到小车热点'; }, 4000); return; }
+  b.textContent = '切换到小车热点';
+  try { await api('/api/wifi/hotspot', {}); } catch (e) { alertLine(e.message); return; }
+  showOverlay('小车正在切换到自己的热点', '<ol><li>小车会离开当前网络，开热点 <b>ROSMASTER</b>（密码 12345678）。</li><li>把这台电脑或手机连到 ROSMASTER。</li><li>这个页面会自动跳到 http://192.168.1.11:8080；没跳的话手动打开它。</li></ol>');
+  watch(['http://192.168.1.11:8080', 'http://rosmaster.local:8080'], 'ROSMASTER');
+});
+function alertLine(msg) { $('nw-scan-note').textContent = msg; }
+async function startConnect(ssid, pw) {
+  try { await api('/api/wifi/connect', { ssid: ssid, password: pw || '' }); } catch (e) { alertLine('没能开始连接：' + e.message); return; }
+  NW.openForm = null;
+  showOverlay('小车正在连接「' + esc(ssid) + '」',
+    '<ol><li>小车切换网络大约要 10–45 秒。</li><li>如果你现在是通过 ROSMASTER 热点连着小车，热点会消失、连接会断开，这是正常的。</li>' +
+    '<li>把这台电脑或手机也连到「' + esc(ssid) + '」。</li><li>这个页面会自动跳到 http://rosmaster.local:8080。一直没跳的话，看小车 OLED 小屏上的 IP，打开 http://那个IP:8080。</li>' +
+    '<li>如果密码错了，小车会回到原来的网络；如果原来的网络也不在附近，它会自己开热点 ROSMASTER，重新连上热点再试。</li></ol>');
+  watch(['http://rosmaster.local:8080'], ssid);
+}
+function showOverlay(title, body) {
+  $('nw-ov-title').textContent = title; $('nw-ov-body').innerHTML = body; $('nw-ov-status').textContent = '';
+  $('nw-overlay').classList.remove('hidden');
+}
+$('nw-ov-close').addEventListener('click', () => { $('nw-overlay').classList.add('hidden'); if (NW.watcher) clearInterval(NW.watcher); NW.watcher = null; loadWifi(); });
+function reachable(url) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 1500);
+  return fetch(url + '/api/state?probe=' + Date.now(), { mode: 'no-cors', cache: 'no-store', signal: ctl.signal })
+    .then(() => true, () => false).finally(() => clearTimeout(t));
+}
+function watch(targets, ssid) {
+  if (NW.watcher) clearInterval(NW.watcher);
+  const t0 = Date.now(), here = location.origin;
+  NW.watcher = setInterval(async () => {
+    const secs = Math.round((Date.now() - t0) / 1000);
+    // 1) Still reachable at this address? Then the switch either failed or kept us on the same network.
+    if (secs > 6) {
+      try {
+        const r = await api('/api/wifi');
+        const a = r.attempt || {};
+        if (a.ssid === ssid && a.state === 'failed') { $('nw-ov-status').textContent = '连接失败：' + (a.reason || '') + '。可以关闭这个窗口重试。'; clearInterval(NW.watcher); NW.watcher = null; return; }
+        if (a.ssid === ssid && a.state === 'connected') {
+          $('nw-ov-status').textContent = '小车已连上「' + ssid + '」，IP ' + (a.ip || '—') + '。';
+          // This page's own address works on the new network (e.g. rosmaster.local): just reload.
+          if (targets.includes(here)) { clearInterval(NW.watcher); NW.watcher = null; setTimeout(() => location.reload(), 1500); return; }
+        }
+      } catch (e) { /* not reachable here any more: expected after a switch */ }
+    }
+    // 2) Reachable at the new address? Go there.
+    for (const u of targets) {
+      if (u === here) continue;
+      if (await reachable(u)) { $('nw-ov-status').textContent = '在新网络上找到小车了，正在跳转…'; clearInterval(NW.watcher); location.href = u + '/'; return; }
+    }
+    if (!$('nw-ov-status').textContent.startsWith('小车已连上')) $('nw-ov-status').textContent = '等待中… ' + secs + ' 秒';
+    if (secs > 180) $('nw-ov-status').textContent = '3 分钟还没找到小车：看 OLED 小屏上的 IP，或者重新连 ROSMASTER 热点检查。';
+  }, 2000);
+}
+
+showTab(load('tab', 'drive'));

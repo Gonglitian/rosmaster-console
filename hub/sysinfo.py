@@ -27,5 +27,11 @@ def cpu_temp_c():
 
 
 def snapshot():
-    return {'ip': lan_ip(), 'hostname': socket.gethostname(),
-            'disk_free_gb': disk_free_gb(), 'cpu_temp_c': cpu_temp_c()}
+    out = {'ip': lan_ip(), 'hostname': socket.gethostname(),
+           'disk_free_gb': disk_free_gb(), 'cpu_temp_c': cpu_temp_c()}
+    try:
+        from . import wifi
+        out['net'] = wifi.status()
+    except Exception:
+        out['net'] = None
+    return out
