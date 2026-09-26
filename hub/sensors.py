@@ -78,6 +78,12 @@ class SensorManager(object):
         s = self.sensors.get(name)
         if s is None:
             return
+        if config.NO_HARDWARE:
+            if on:
+                self._set(s, ERROR, 'test mode (HF_NO_HARDWARE=1): no sensors on this machine')
+            else:
+                self._set(s, OFF, attempt=0)
+            return
         if on and s.state in (OFF, ERROR):
             self._spawn(s, getattr(self, '_start_' + name)(s))
         elif not on and s.state in (STARTING, ON, ERROR):

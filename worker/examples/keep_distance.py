@@ -26,7 +26,7 @@ class KeepDistance(Worker):
         self.target, self.max_speed, self.gain = target, max_speed, gain
 
     def on_active(self, active):
-        print('>>> control %s' % ('GIVEN: the car may move now' if active else 'taken back'))
+        print('>>> control %s' % ('GIVEN: the car may move now' if active else 'taken back'), flush=True)
 
     def on_scan(self, scan):
         ahead = [(x, y) for x, y in self.scan_points(scan, max_range=3.0)
@@ -45,7 +45,7 @@ class KeepDistance(Worker):
         self.send_cmd(vx, 0.0, 0.0, obs=scan)
         self.send_debug(markers, text)
         if self.active:
-            print(('DRIVING  ' if self.driving else 'waiting  ') + text)
+            print(('DRIVING  ' if self.driving else 'waiting  ') + text, flush=True)
 
 
 if __name__ == '__main__':

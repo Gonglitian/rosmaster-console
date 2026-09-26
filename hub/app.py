@@ -1,6 +1,6 @@
 """The hub: web panel, WebSocket protocol, control loop.
 
-Panel protocol (JSON text frames on /ws; full spec in docs/protocol.md):
+Protocol (JSON text frames on /ws; full spec in docs/API.md):
   client -> hub: manual{vx,vy,wz,seq} | manual_release | hand_back | estop |
                  estop_release | sensor{name,on} | beep | ping{c}
   hub -> client: hello | state (5 Hz) | scan (every scan) | odom (every odom) |
@@ -490,6 +490,42 @@ class NetHandler(tornado.web.RequestHandler):
         self.write(json.dumps(await self.hub.loop.run_in_executor(None, self.hub.wifi.where)))
 
 
+class ControlHandler(tornado.web.RequestHandler):
+    """Terminal fallback without a WebSocket client:
+      POST /api/estop            {"release": false}   engage (default) or release the e-stop
+      POST /api/sensor           {"name": "base"|"lidar"|"camera", "on": true|false}
+    """
+
+    def initialize(self, hub):
+        self.hub = hub
+
+    def post(self, action):
+        try:
+            body = json.loads(self.request.body or b'{}')
+        except ValueError:
+            body = {}
+        hub, a = self.hub, self.hub.arbiter
+        who = 'http %s' % self.request.remote_ip
+        if action == 'estop':
+            if body.get('release'):
+                a.release_estop()
+                log.warning('e-stop released by %s', who)
+            else:
+                a.trigger_estop(who)
+                hub._publish(0.0, 0.0, 0.0)
+                log.warning('E-STOP from %s', who)
+            hub.push_state()
+        elif action == 'sensor':
+            name = body.get('name')
+            if name not in hub.sensors.sensors:
+                self.set_status(400)
+                self.write({'error': 'name must be base, lidar or camera'})
+                return
+            hub.sensors.request(name, bool(body.get('on')))
+        self.set_header('Content-Type', 'application/json')
+        self.write(json.dumps({'ok': True, 'control': a.snapshot(), 'sensors': hub.sensors.snapshot()}))
+
+
 class NoCacheStatic(tornado.web.StaticFileHandler):
     def set_extra_headers(self, path):
         self.set_header('Cache-Control', 'no-cache')
@@ -503,6 +539,7 @@ def make_app(hub):
         (r'/api/battery', BatteryHandler, {'hub': hub}),
         (r'/api/wifi', WifiHandler, {'hub': hub}),
         (r'/api/net', NetHandler, {'hub': hub}),
+        (r'/api/(estop|sensor)', ControlHandler, {'hub': hub}),
         (r'/api/wifi/(scan|connect|hotspot|forget)', WifiHandler, {'hub': hub}),
         (r'/(.*)', NoCacheStatic, {'path': config.WEB_DIR, 'default_filename': 'index.html'}),
     ], websocket_ping_interval=5, websocket_ping_timeout=15)

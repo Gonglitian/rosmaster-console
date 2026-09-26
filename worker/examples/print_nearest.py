@@ -16,7 +16,7 @@ from rc_worker import Worker  # noqa: E402
 
 class PrintNearest(Worker):
     def on_connect(self):
-        print('connected as %s; waiting for scans (is Lidar on in the dashboard?)' % self.worker_id)
+        print('connected as %s; waiting for scans (is Lidar on in the dashboard?)' % self.worker_id, flush=True)
 
     def on_scan(self, scan):
         pts = self.scan_points(scan)
@@ -24,7 +24,7 @@ class PrintNearest(Worker):
             return
         x, y = min(pts, key=lambda p: math.hypot(*p))
         print('scan %5d: %4d points, nearest %.2f m at %+4.0f deg (x %+.2f, y %+.2f)'
-              % (scan['seq'], len(pts), math.hypot(x, y), math.degrees(math.atan2(y, x)), x, y))
+              % (scan['seq'], len(pts), math.hypot(x, y), math.degrees(math.atan2(y, x)), x, y), flush=True)
         self.send_debug([{'x': x, 'y': y, 'kind': 'point', 'label': 'nearest'}],
                         'nearest %.2f m' % math.hypot(x, y))
 

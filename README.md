@@ -1,57 +1,46 @@
-# rosmaster-console：小车中控台
+# rosmaster-console
 
-用浏览器控制 Yahboom ROSMASTER X3 麦轮小车（车载电脑是树莓派 5）。手机和电脑都不用装 ROS：在同一个局域网里打开 `http://rosmaster.local:8080` 就能看到雷达俯视图和相机画面，也能开车和急停。
+Drive and debug the Yahboom ROSMASTER X3 car from a browser, and let a policy running on any laptop drive it.
 
-设计的来龙去脉见决策记录：`Human-Following/2026-09-26_小车中控台_架构决策/架构决策记录.md`。
+The car runs a small service, the **hub**. Open `http://rosmaster.local:8080` on a phone or laptop on the same network to get the **dashboard**:
+- a live lidar top-down view and the camera
+- joysticks and an E-STOP
+- sensor switches
+- a battery estimate
+- Wi-Fi setup
 
-## 三个角色
+Policies run as **workers**, plain Python programs on tasl-l1 (GPU) or any laptop. A worker connects to the hub, receives scans and odometry, and sends velocity commands. It drives only after someone presses **Give control** in the dashboard. Laptops and phones need no ROS; ROS 2 runs only on the car.
 
-- **hub（中控服务）**：跑在小车上的 Python 服务，是唯一直接接触 ROS 的程序。它负责起停传感器、仲裁控制权、执行安全规则，并提供网页和 WebSocket。
-- **面板**：hub 自带的网页（`web/`），手机优先的布局。
-- **worker（跑 policy 的进程）**：第二阶段再做。装在任意笔记本上的普通 Python 程序，通过 WebSocket 连上 hub，收传感器数据、跑跟随管线、发回速度指令。
+## Documentation
 
-## 目录
+| Read | For |
+|---|---|
+| [docs/QUICKSTART.md](docs/QUICKSTART.md) | **Start here.** From a switched-off car to driving, and back. |
+| [docs/DASHBOARD.md](docs/DASHBOARD.md) | Every part of the dashboard, including Wi-Fi setup in a new place |
+| [docs/TERMINAL.md](docs/TERMINAL.md) | When the dashboard is not enough: SSH, Docker, curl, nmcli Wi-Fi recipes, recovery |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How it is built: processes, topics, control path, safety model, design decisions |
+| [docs/POLICY.md](docs/POLICY.md) | Writing and running a policy; running the old human-following pipeline |
+| [docs/API.md](docs/API.md) | HTTP endpoints, WebSocket messages, formats, settings |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Develop, deploy, test; known issues; what is not verified yet |
+
+## Layout
 
 ```
-car/        小车端：Dockerfile、安装脚本、启动文件，以及只听 hub 的安全底盘驱动
-hub/        中控服务（Python 3.8，唯一依赖 tornado）
-web/        面板（纯 HTML/JS，不需要构建）
-docs/       协议说明
-scripts/    开发机上用的部署脚本
-tests/      单元测试（不依赖 ROS）
+car/        on-car: Docker image, install script, supervisor, launch files, safe chassis driver
+hub/        the hub (Python 3.8, tornado)
+web/        the dashboard (plain HTML/JS, no build step)
+worker/     rc_worker.py (policy client) and examples/
+scripts/    deploy, test hub, probes and end-to-end tests (run on tasl-l1)
+tests/      unit tests (no ROS needed)
+docs/       documentation
 ```
 
-## 安装和更新
-
-开发在 tasl-l1 上进行（它和小车在同一个局域网里）：
+## Common commands (on tasl-l1)
 
 ```bash
-bash scripts/deploy_car.sh --install   # 第一次：同步代码，在车上构建镜像并创建 rc-hub 容器
-bash scripts/deploy_car.sh             # 以后：同步代码，重启 hub
-```
-
-`car/install_hub.sh` 在车上做四件事：
-
-1. 把 Yahboom 原来的 `x3` 容器存成快照 `rc-base:x3-20260926`，作为基础镜像，保证 ROS 环境和论文实验时完全一致；
-2. 在快照上装 tornado；
-3. 停掉旧的 `x3` 容器（两个底盘驱动会争用串口）；
-4. 创建开机自启的 `rc-hub` 容器。容器用特权模式运行，因为雷达启动失败时需要做 USB 软拔插。
-
-## 安全模型
-
-详见 `docs/protocol.md` 最后一节。要点：
-
-- 小车只听 hub 的：底盘驱动换成了 `car/nodes/hf_driver_x3.py`，它只订阅 `/hub/cmd_vel`，不再订阅 `/cmd_vel`。所以局域网里别的机器发 `/cmd_vel` 会被忽略，包括 tasl-l1 上原来的 `start_real_robot.sh`。
-- 急停 > 手动 > policy。手动一碰就接管，按按钮才交还。
-- 当前的指令来源 0.5 s 没发指令就停车。hub 卡死或崩溃时，驱动自带的 0.5 s 看门狗也会停车，因为容器入口是一个看护脚本，hub 崩溃时容器不会跟着退出。整个容器被杀或树莓派断电时，只能靠底盘主控板自己，这一点**还没验证**，见 `docs/protocol.md`「出故障时车会不会停」。
-- 限速 0.7 m/s、1.5 rad/s，加速度上限 1.5 m/s²，都在小车上强制执行。
-
-## 回到旧流程
-
-在车上执行 `docker stop rc-hub && docker start x3`，然后按 tasl-l1 `~/human-following/scripts/start_real_robot.sh` 的注释操作。不要让两个容器同时驱动底盘。
-
-## 测试
-
-```bash
-python3 -m pytest tests/        # 或 python3 -m unittest discover tests
+bash scripts/deploy_car.sh                          # push this checkout to the car, restart the hub
+bash scripts/deploy_car.sh --install                # first install, or after changing car/Dockerfile
+/usr/bin/python3 -m unittest discover tests         # unit tests
+bash scripts/test_hub.sh start                      # hub without the car at http://localhost:8091
+/usr/bin/python3 worker/examples/keep_distance.py   # example policy (press Give control in the dashboard)
 ```

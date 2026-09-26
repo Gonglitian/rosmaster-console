@@ -30,8 +30,13 @@ import socket
 import threading
 import time
 
-from tornado.ioloop import IOLoop
-from tornado.websocket import websocket_connect
+try:
+    from tornado.ioloop import IOLoop
+    from tornado.websocket import websocket_connect
+except ImportError:   # most often: conda's python3 on tasl-l1
+    raise SystemExit('rc_worker needs tornado. On tasl-l1 use the system Python: '
+                     '/usr/bin/python3 (or run "conda deactivate" first). '
+                     'Elsewhere: pip install tornado')
 
 log = logging.getLogger('rc_worker')
 

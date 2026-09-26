@@ -540,7 +540,7 @@ function renderWifi() {
   $('nw-now').innerHTML = '<dt>Mode</dt><dd>' + (st.hotspot ? "Car's own hotspot (" + esc(st.ssid) + ', password 12345678)' : st.state === 'connected' ? 'Connected to Wi-Fi' : esc(st.state || '—')) + '</dd>' +
     (st.hotspot ? '' : '<dt>Network</dt><dd>' + esc(st.ssid || '—') + '</dd>') +
     '<dt>Car IP</dt><dd>' + esc(st.ip || '—') + '</dd>' +
-    '<dt>Dashboard</dt><dd>http://rosmaster.local:8080　or　' + esc(addr) + '</dd>';
+    '<dt>Dashboard</dt><dd>http://rosmaster.local:8080 or ' + esc(addr) + '</dd>';
   $('nw-hotspot').disabled = !!st.hotspot;
   const note = r.scan_error ? 'Scan failed: ' + esc(r.scan_error) + ' (you can still type a network name below)'
     : r.scan_time ? 'Last scan ' + Math.round(Date.now() / 1000 - r.scan_time) + ' s ago (a scan adds a short Wi-Fi latency spike; avoid it while driving)' : 'Not scanned yet: press Scan.';
