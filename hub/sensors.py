@@ -46,6 +46,7 @@ class SensorManager(object):
         self.procs = {}
         self.last_activity = time.time()
         self.motor = LidarMotor()
+        self.reader = None      # BatteryReader, set by the hub
 
     # ---- public -------------------------------------------------------
     async def startup(self):
@@ -53,6 +54,16 @@ class SensorManager(object):
         the unused depth sensor suspend."""
         await self._blocking(allow_depth_sensor_suspend)
         await self._stop_motor(self.sensors['lidar'])
+        self._monitor_battery(True)
+
+    def _monitor_battery(self, on):
+        """The battery monitor owns /dev/myserial whenever the chassis driver does not."""
+        if self.reader is None:
+            return
+        if on and 'base' not in self.procs:
+            self.reader.start()
+        elif not on:
+            self.reader.stop()
 
     def snapshot(self):
         return {n: s.snapshot() for n, s in self.sensors.items()}
@@ -102,6 +113,8 @@ class SensorManager(object):
         self._set(s, OFF, attempt=0)
         if s.name == 'lidar':
             await self._stop_motor(s)
+        elif s.name == 'base':
+            self._monitor_battery(True)
 
     async def _stop_motor(self, s):
         if not await self._blocking(self.motor.stop):
@@ -133,6 +146,8 @@ class SensorManager(object):
             self._set(s, ERROR, '已有别的底盘驱动在运行（节点 %s），可能是旧的 x3 容器。'
                                 '先停掉它，两个驱动会争用串口。' % ', '.join(foreign))
             return
+        if self.reader is not None:
+            await self._blocking(self.reader.stop)   # the driver needs /dev/myserial
         proc = self._launch('base')
         self._set(s, STARTING, '启动驱动、IMU 滤波和 EKF')
         # Ready = the driver is alive (it publishes /voltage from the STM32 at
@@ -145,6 +160,7 @@ class SensorManager(object):
             if not proc.running:
                 self._set(s, ERROR, '进程退出：' + ' | '.join(proc.tail(3)))
                 self.procs.pop('base', None)
+                self._monitor_battery(True)
                 return
             if self._fresh('voltage', proc.started_at):
                 break
@@ -153,6 +169,7 @@ class SensorManager(object):
             self.procs.pop('base', None)
             self._set(s, ERROR, '%.0f 秒内没收到驱动的 /voltage，底盘驱动没起来'
                       % config.BASE_START_TIMEOUT)
+            self._monitor_battery(True)
             return
         odom_deadline = time.time() + 5.0
         while time.time() < odom_deadline and not self._fresh('odom', proc.started_at):
@@ -246,6 +263,8 @@ class SensorManager(object):
                 self._set(s, ERROR, '进程意外退出：' + ' | '.join(proc.tail(3) if proc else []))
                 if name == 'lidar':
                     self.loop.create_task(self._stop_motor(s))
+                elif name == 'base':
+                    self._monitor_battery(True)
                 continue
             age = now - self.bridge.rates[topic].last
             if age > config.STALE_TOPIC_TIMEOUT:

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#0f1216">
 <title>小车中控台</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -19,6 +20,10 @@
 </header>
 
 <button id="estop" class="estop" type="button">急停</button>
+<nav class="tabs" role="tablist">
+  <button type="button" role="tab" data-tab="drive" class="on">控制</button>
+  <button type="button" role="tab" data-tab="battery">电量</button>
+</nav>
 </div>
 <div id="estop-banner" class="banner hidden">
   <span>已急停<small id="estop-reason"></small></span>
@@ -26,7 +31,7 @@
 </div>
 <div id="offline" class="banner warn hidden">与小车的连接断开，正在重连…</div>
 
-<main>
+<main id="tab-drive">
   <div class="card view">
     <canvas id="topdown" aria-label="俯视图：小车在中心，前方朝上"></canvas>
     <div class="view-tools">
@@ -66,6 +71,59 @@
     </div>
     <div id="cmd" class="cmd">输出 vx 0.00 · vy 0.00 · ω 0.00</div>
   </div>
+</main>
+
+<main id="tab-battery" class="battery-page hidden">
+  <section class="card bat-hero">
+    <div class="bat-top">
+      <div class="bat-big"><span id="bp-pct">—</span></div>
+      <div class="bat-head">
+        <div id="bp-state" class="bat-state">—</div>
+        <div id="bp-sub" class="bat-sub">—</div>
+      </div>
+    </div>
+    <div class="bat-bar" id="bp-bar" aria-label="电量进度条">
+      <div class="bat-band" id="bp-band" title="长期存放区间 11.1–11.7 V"></div>
+      <div class="bat-fill" id="bp-fill"></div>
+      <div class="bat-now" id="bp-now"></div>
+    </div>
+    <div class="bat-scale" id="bp-scale"></div>
+  </section>
+
+  <section class="card bat-times">
+    <h3>放电：多久会到报警线</h3>
+    <div id="bp-discharge" class="bat-eta">—</div>
+    <h3>充电：多久能充满</h3>
+    <div id="bp-charge" class="bat-eta">—</div>
+    <div class="bat-inputs">
+      <label>电池容量 <input id="bp-cap" type="number" min="1000" max="20000" step="100" value="6000"> mAh</label>
+      <label>充电器电流 <input id="bp-cur" type="number" min="0.5" max="10" step="0.1" value="2.0"> A</label>
+    </div>
+    <p class="note">Yahboom 要求充电时关闭扩展板总电源，所以充电过程中小车测不到电压，充满时间只能按上面两个数估算（两个默认值都没核实，可以改）。充电器红灯表示在充，绿灯表示充满，充满后及时拔掉。</p>
+  </section>
+
+  <section class="card bat-details">
+    <h3>详细数据</h3>
+    <dl id="bp-details"></dl>
+  </section>
+
+  <section class="card bat-chart">
+    <h3>电压曲线</h3>
+    <canvas id="bp-chart" aria-label="电压随时间变化"></canvas>
+    <div id="bp-chart-note" class="note"></div>
+  </section>
+
+
+  <section class="card bat-method">
+    <h3>这些数字怎么来的</h3>
+    <ul>
+      <li>底盘板只报电压（0.1 V 一档），没有电流和百分比。百分比按 3S 三元锂电池的开路电压曲线换算，0% 定在 Yahboom 的 9.6 V 蜂鸣报警点。电池实际是三元锂还是锂聚合物没有确认，看电池标签：INR 是三元锂，ICR 或扁平软包是锂聚合物。</li>
+      <li>开车时电压会被拉低，所以只用静止时的电压（停车 5 秒后开始算，20 秒平滑）；行驶中显示值保持不变。显示值只降不升，除非电压持续升高 30 秒以上（说明充过电或换了电池）。</li>
+      <li>耗电速度取最近 15 分钟静止数据的斜率，至少要积累 5 分钟。开着的传感器越多耗电越快，数字会跟着变。</li>
+      <li>底盘关闭时，hub 会直接从底盘板读电压（电量监测）；开底盘前自动让出串口。</li>
+      <li>提醒线 10.5 V，收车线 10.0 V，报警线 9.6 V；到 9.0 V hub 会自动急停。长期存放请保持在 11.1–11.7 V。</li>
+    </ul>
+  </section>
 </main>
 
 <footer id="info">—</footer>

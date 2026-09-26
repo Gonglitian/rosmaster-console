@@ -31,6 +31,12 @@ RESET_HOLD = 30.0          # ... sustained this long = battery charged or swappe
 FAST_WINDOW = 2.0          # s, mean used for the safety thresholds
 STALE_AFTER = 3.0          # s without a valid sample = no data (chassis off)
 JUMP_SAMPLES = 30          # consecutive 'spikes' (~3 s) = a real jump, start over
+STORAGE_V = (11.1, 11.7)   # Yahboom: keep the pack here for long-term storage
+
+HISTORY_EVERY = 5.0        # s between points kept for the battery page's chart
+HISTORY_SPAN = 3 * 3600.0  # s of history kept
+TREND_WINDOW = 900.0       # s of resting points used for the drain rate
+TREND_MIN_SPAN = 300.0     # s of resting data needed before a rate is reported
 
 
 def percent_for(volts, table=NMC_TABLE):
@@ -54,6 +60,8 @@ class BatteryEstimator(object):
         self._init_samples = []
         self._spikes = 0
         self.last_valid = None
+        self.history = collections.deque(maxlen=int(HISTORY_SPAN / HISTORY_EVERY))
+        self._last_hist = None
 
     def update(self, volts, now, moving):
         """Feed one /voltage sample. `moving` = the hub is commanding nonzero velocity."""
@@ -75,6 +83,7 @@ class BatteryEstimator(object):
 
         if self._driving(now):
             self.last_sample = now
+            self._record(now, volts, resting=False)
             return
         if self.rest_v is None:
             self._init_samples.append(volts)
@@ -87,6 +96,52 @@ class BatteryEstimator(object):
             self.rest_v += alpha * (volts - self.rest_v)
             self._update_shown(now)
         self.last_sample = now
+        if self.rest_v is not None:
+            self._record(now, self.rest_v, resting=True)
+
+    def _record(self, now, volts, resting):
+        if self._last_hist is None or now - self._last_hist >= HISTORY_EVERY:
+            self.history.append((now, volts, resting))
+            self._last_hist = now
+
+    def trend(self, now):
+        """Least-squares slope of resting voltage and percent over the last
+        TREND_WINDOW seconds, or None until TREND_MIN_SPAN of resting data exists."""
+        pts = [(t, v) for t, v, rest in self.history if rest and now - t <= TREND_WINDOW]
+        if len(pts) < 10 or pts[-1][0] - pts[0][0] < TREND_MIN_SPAN:
+            return None
+        n = float(len(pts))
+        mt = sum(t for t, _ in pts) / n
+        dt2 = sum((t - mt) ** 2 for t, _ in pts)
+        if dt2 <= 0:
+            return None
+        mv = sum(v for _, v in pts) / n
+        pcts = [percent_for(v) for _, v in pts]
+        mp = sum(pcts) / n
+        sv = sum((t - mt) * (v - mv) for t, v in pts) / dt2
+        sp = sum((t - mt) * (p - mp) for (t, _), p in zip(pts, pcts)) / dt2
+        return {'v_per_h': round(sv * 3600, 3), 'pct_per_h': round(sp * 3600, 2),
+                'span_min': round((pts[-1][0] - pts[0][0]) / 60.0, 1)}
+
+    def eta(self, now):
+        """Minutes until each alarm line at the measured drain rate."""
+        tr = self.trend(now)
+        if tr is None or self.shown_v is None:
+            return None
+        pct_now = percent_for(self.shown_v)
+        if tr['pct_per_h'] > 2.0:
+            return {'status': 'rising'}
+        if tr['pct_per_h'] > -0.5:
+            return {'status': 'steady'}
+        per_min = -tr['pct_per_h'] / 60.0
+        out = {'status': 'discharging'}
+        for name, volts in (('warn', WARN_V), ('critical', CRITICAL_V), ('alarm', STOP_V)):
+            target = percent_for(volts)
+            out[name] = 0 if pct_now <= target else int(round((pct_now - target) / per_min))
+        return out
+
+    def history_points(self):
+        return [[round(t, 1), round(v, 3), bool(rest)] for t, v, rest in self.history]
 
     def _restart(self):
         self.rest_v = self.shown_v = None
@@ -126,14 +181,18 @@ class BatteryEstimator(object):
             level = 'stop'
         elif (rest is not None and rest <= CRITICAL_V) or (fast is not None and fast <= 9.9):
             level = 'critical'
-        elif rest is not None and rest <= WARN_V:
+        elif (rest if rest is not None else fast) is not None and (rest if rest is not None else fast) <= WARN_V:
             level = 'warn'
         else:
             level = 'ok'
+        basis = rest if rest is not None else self.latest
         return {'state': state, 'v': round(self.latest, 2),
                 'v_rest': None if rest is None else round(rest, 2),
                 'v_fast': None if fast is None else round(fast, 2),
-                'pct': pct, 'level': level}
+                'cell_v': round(basis / 3.0, 3),
+                'pct': pct, 'pct_exact': None if rest is None else round(percent_for(rest), 1),
+                'level': level, 'trend': self.trend(now), 'eta': self.eta(now),
+                'age': round(now - self.last_valid, 1)}
 
     def below_floor(self, now=None):
         if now is not None and (self.last_valid is None or now - self.last_valid > STALE_AFTER):

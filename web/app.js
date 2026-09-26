@@ -56,6 +56,7 @@ function renderState() {
   $('estop-reason').textContent = c.estop_reason ? '（' + c.estop_reason + '）' : '';
 
   renderBattery(st.battery);
+  renderBatteryPage(st);
 
   let msg = '', bad = false;
   for (const btn of document.querySelectorAll('[data-sensor]')) {
@@ -286,5 +287,181 @@ function draw() {
   $('view-note').textContent = note.join(' · ') || '绿箭头：下发速度　蓝箭头：实测速度';
 }
 
+// ---------- tabs ----------
+function showTab(name) {
+  for (const b of document.querySelectorAll('[data-tab]')) b.classList.toggle('on', b.dataset.tab === name);
+  $('tab-drive').classList.toggle('hidden', name !== 'drive');
+  $('tab-battery').classList.toggle('hidden', name !== 'battery');
+  store('tab', name);
+  S.dirty = true;
+  if (name === 'battery') { fetchBattery(); if (S.state) renderBatteryPage(S.state); }
+}
+for (const b of document.querySelectorAll('[data-tab]')) b.addEventListener('click', () => showTab(b.dataset.tab));
+$('battery').addEventListener('click', () => showTab('battery'));
+const batteryVisible = () => !$('tab-battery').classList.contains('hidden');
+
+// ---------- battery page ----------
+const BAT = { report: null };
+const STATE_TEXT = { resting: '静止', settling: '估算中（需要静止约 2 秒）', driving: '行驶中（读数保持）', nodata: '没有电压数据' };
+const LEVEL_TEXT = { ok: '正常', warn: '电量低，尽快充电', critical: '电量很低，结束测试准备充电', stop: '已到 9.6 V 报警线，立即停车并关机充电', unknown: '—' };
+const SOURCE_TEXT = { driver: '底盘驱动（/voltage）', monitor: '电量监测（底盘关闭时直接读底盘板）' };
+for (const id of ['bp-cap', 'bp-cur']) {
+  const el = $(id);
+  el.value = load(id, el.value);
+  el.addEventListener('input', () => { store(id, el.value); if (S.state) renderBatteryPage(S.state); });
+}
+function pctFor(v, table) {
+  if (!table || v == null) return null;
+  if (v <= table[0][0]) return 0;
+  for (let i = 1; i < table.length; i++) {
+    const [v0, p0] = table[i - 1], [v1, p1] = table[i];
+    if (v <= v1) return p0 + (p1 - p0) * (v - v0) / (v1 - v0);
+  }
+  return 100;
+}
+function fmtMin(m) {
+  if (m == null) return '—';
+  if (m < 1) return '不到 1 分钟';
+  if (m < 90) return Math.round(m) + ' 分钟';
+  const h = Math.floor(m / 60), r = Math.round(m % 60);
+  return h + ' 小时' + (r ? ' ' + r + ' 分' : '');
+}
+async function fetchBattery() {
+  try {
+    const r = await fetch('/api/battery', { cache: 'no-store' });
+    BAT.report = await r.json();
+    buildScale();
+    drawBatteryChart();
+    if (S.state) renderBatteryPage(S.state);
+  } catch (e) {}
+}
+setInterval(() => { if (batteryVisible()) fetchBattery(); }, 10000);
+
+function buildScale() {
+  const rep = BAT.report; if (!rep) return;
+  const T = rep.thresholds, tbl = rep.table, bar = $('bp-bar'), scale = $('bp-scale');
+  bar.querySelectorAll('.bat-tick').forEach((e) => e.remove());
+  scale.innerHTML = '';
+  const marks = [
+    [T.alarm, '9.6 V 报警', 'alarm'], [T.critical, '10.0 V 收车', 'warn'],
+    [T.warn, '10.5 V 提醒', 'warn'], [T.full, '12.6 V 满', '']];
+  for (const [v, label, cls] of marks) {
+    const x = pctFor(v, tbl);
+    const tick = document.createElement('div');
+    tick.className = 'bat-tick ' + cls; tick.style.left = x + '%';
+    bar.appendChild(tick);
+    const sp = document.createElement('span');
+    sp.textContent = label; sp.style.left = x + '%';
+    if (x < 3) sp.className = 'edge-l'; else if (x > 97) sp.className = 'edge-r';
+    // The alarm lines sit close together at the left end: one label per line.
+    if (v === T.warn) sp.style.top = '15px';
+    if (v === T.critical) { sp.style.top = '30px'; sp.className = 'edge-l'; }
+    scale.appendChild(sp);
+  }
+  const b0 = pctFor(T.storage[0], tbl), b1 = pctFor(T.storage[1], tbl);
+  const band = $('bp-band'); band.style.left = b0 + '%'; band.style.width = (b1 - b0) + '%';
+  const sp = document.createElement('span');
+  sp.textContent = '存放 11.1–11.7 V'; sp.style.left = ((b0 + b1) / 2) + '%';
+  scale.appendChild(sp);
+}
+
+function renderBatteryPage(st) {
+  if (!batteryVisible()) return;
+  const b = st.battery || {}, tbl = BAT.report && BAT.report.table;
+  const pctExact = b.pct_exact != null ? b.pct_exact : (b.v != null ? pctFor(b.v, tbl) : null);
+  $('bp-pct').textContent = b.pct != null ? '≈' + b.pct + '%' : '—';
+  $('bp-state').textContent = b.state === 'nodata' ? STATE_TEXT.nodata
+    : (LEVEL_TEXT[b.level] || '—') + ' · ' + (STATE_TEXT[b.state] || b.state);
+  $('bp-state').style.color = b.level === 'critical' || b.level === 'stop' ? 'var(--bad)' : b.level === 'warn' ? 'var(--warn)' : '';
+  $('bp-sub').textContent = b.v == null ? '底盘关着时由电量监测读电压；如果一直没有数据，检查 hub 日志'
+    : b.v.toFixed(2) + ' V · 每节电芯 ' + b.cell_v.toFixed(2) + ' V · 来源：' + (SOURCE_TEXT[b.source] || '—');
+  const fill = $('bp-fill');
+  fill.style.width = (pctExact == null ? 0 : Math.max(0, Math.min(100, pctExact))) + '%';
+  fill.className = 'bat-fill' + (b.level === 'critical' || b.level === 'stop' ? ' low' : b.level === 'warn' ? ' warn' : '');
+  $('bp-now').style.display = pctExact == null ? 'none' : '';
+  $('bp-now').style.left = (pctExact || 0) + '%';
+
+  // Discharge: measured drain rate
+  const e = b.eta, tr = b.trend, dis = $('bp-discharge');
+  if (b.state === 'nodata') dis.innerHTML = '<span class="muted">没有电压数据。</span>';
+  else if (!e) dis.innerHTML = '<span class="muted">正在积累数据：需要连续静止约 5 分钟，才能算出耗电速度。</span>';
+  else if (e.status === 'steady') dis.innerHTML = '最近 ' + tr.span_min + ' 分钟电量几乎没变（' + tr.pct_per_h + '%/小时）。';
+  else if (e.status === 'rising') dis.innerHTML = '最近 ' + tr.span_min + ' 分钟电压在上升（刚停车后的回升，或正在开机充电；Yahboom 不建议边充边用）。';
+  else {
+    const line = (name, label) => e[name] === 0 ? label + '：<b>已经低于</b>' : label + '：约 <b>' + fmtMin(e[name]) + '</b>';
+    const on = Object.entries(st.sensors).filter(([, v]) => v.state === 'on').map(([k]) => ({ base: '底盘', lidar: '雷达', camera: '相机' }[k]));
+    dis.innerHTML = line('warn', '到提醒线 10.5 V') + '<br>' + line('critical', '到收车线 10.0 V') + '<br>' +
+      line('alarm', '到蜂鸣报警 9.6 V') +
+      '<div class="note">按最近 ' + tr.span_min + ' 分钟的耗电速度（' + (-tr.pct_per_h).toFixed(1) + '%/小时）推算；当前开着：' +
+      (on.length ? on.join('、') : '无') + '。开车或多开传感器会更快。</div>';
+  }
+
+  // Charge: estimate from capacity and charger current
+  const cap = +$('bp-cap').value, cur = +$('bp-cur').value, chg = $('bp-charge');
+  if (pctExact == null || !cap || !cur) chg.innerHTML = '<span class="muted">没有电量数据时无法估算。</span>';
+  else {
+    const hours = (p) => Math.max(0, (p - pctExact) / 100) * cap / (cur * 1000) * 1.15;   // +15 % for the constant-voltage tail
+    const storeLo = pctFor(BAT.report ? BAT.report.thresholds.storage[0] : 11.1, tbl);
+    chg.innerHTML = '从 ≈' + (b.pct != null ? b.pct : Math.round(pctExact)) + '% 充满：约 <b>' + fmtMin(hours(100) * 60) + '</b>' +
+      (pctExact < storeLo ? '<br>只充到长期存放区间（11.1 V）：约 <b>' + fmtMin(hours(storeLo) * 60) + '</b>' : '') +
+      '<div class="note">按 ' + cap + ' mAh、' + cur + ' A 估算，另加 15% 给末段恒压充电。</div>';
+  }
+
+  const d = [
+    ['当前读数', b.v != null ? b.v.toFixed(2) + ' V' : '—'],
+    ['静止电压（平滑后）', b.v_rest != null ? b.v_rest.toFixed(2) + ' V' : '—'],
+    ['最近 2 秒平均', b.v_fast != null ? b.v_fast.toFixed(2) + ' V' : '—'],
+    ['每节电芯（3 节串联）', b.cell_v != null ? b.cell_v.toFixed(3) + ' V' : '—'],
+    ['估算电量', pctExact != null ? pctExact.toFixed(1) + '%' : '—'],
+    ['电压变化', tr ? tr.v_per_h.toFixed(2) + ' V/小时（最近 ' + tr.span_min + ' 分钟）' : '数据不足'],
+    ['电量变化', tr ? tr.pct_per_h.toFixed(1) + ' %/小时' : '数据不足'],
+    ['状态', (STATE_TEXT[b.state] || '—') + ' · ' + (LEVEL_TEXT[b.level] || '—')],
+    ['数据来源', SOURCE_TEXT[b.source] || '—'],
+    ['数据更新', b.age != null ? b.age + ' 秒前' : '—'],
+    ['0% 的定义', '9.6 V（Yahboom 蜂鸣报警点）'],
+    ['自动急停', '9.0 V'],
+    ['电池类型', '3S 锂电，按三元锂曲线估算（类型未确认）'],
+  ];
+  $('bp-details').innerHTML = d.map(([k, v]) => '<dt>' + k + '</dt><dd>' + v + '</dd>').join('');
+}
+
+function drawBatteryChart() {
+  const rep = BAT.report, c = $('bp-chart');
+  if (!rep || !batteryVisible()) return;
+  const dpr = window.devicePixelRatio || 1, w = Math.round(c.clientWidth * dpr), h = Math.round(c.clientHeight * dpr);
+  c.width = w; c.height = h;
+  const g = c.getContext('2d'); g.clearRect(0, 0, w, h);
+  const pts = rep.history, T = rep.thresholds;
+  const padL = 44 * dpr, padR = 8 * dpr, padT = 8 * dpr, padB = 20 * dpr;
+  const vMin = 9.4, vMax = 12.8;
+  const now = rep.stamp, t0 = pts.length ? Math.min(pts[0][0], now - 600) : now - 600;
+  const X = (t) => padL + (w - padL - padR) * (t - t0) / Math.max(1, now - t0);
+  const Y = (v) => padT + (h - padT - padB) * (vMax - v) / (vMax - vMin);
+  g.font = 11 * dpr + 'px sans-serif'; g.lineWidth = dpr;
+  const lines = [[T.full, '#3ecf8e', '12.6'], [T.storage[1], '#5a6472', '11.7'], [T.storage[0], '#5a6472', '11.1'],
+    [T.warn, '#f5b942', '10.5'], [T.critical, '#f5b942', '10.0'], [T.alarm, '#ef4c4c', '9.6']];
+  for (const [v, col, lab] of lines) {
+    g.strokeStyle = col; g.globalAlpha = 0.5; g.setLineDash([4 * dpr, 4 * dpr]);
+    g.beginPath(); g.moveTo(padL, Y(v)); g.lineTo(w - padR, Y(v)); g.stroke();
+    g.setLineDash([]); g.globalAlpha = 1; g.fillStyle = '#8b95a3'; g.fillText(lab + ' V', 4 * dpr, Y(v) + 4 * dpr);
+  }
+  const mins = Math.round((now - t0) / 60);
+  g.fillStyle = '#8b95a3'; g.fillText(mins + ' 分钟前', padL, h - 5 * dpr);
+  const lbl = '现在'; g.fillText(lbl, w - padR - g.measureText(lbl).width, h - 5 * dpr);
+  if (!pts.length) { $('bp-chart-note').textContent = '还没有数据。'; return; }
+  for (const resting of [false, true]) {
+    g.strokeStyle = resting ? '#5aa9ff' : '#8b95a3'; g.lineWidth = (resting ? 2 : 1) * dpr;
+    g.beginPath(); let pen = false, lastT = null;
+    for (const [t, v, r] of pts) {
+      if (r !== resting || (lastT != null && t - lastT > 30)) { pen = false; }
+      if (r === resting) { if (!pen) { g.moveTo(X(t), Y(v)); pen = true; } else g.lineTo(X(t), Y(v)); lastT = t; }
+    }
+    g.stroke();
+  }
+  $('bp-chart-note').textContent = '蓝线：静止电压（平滑后）；灰线：行驶中的读数（被负载拉低，不代表电量）。每 5 秒一个点，最多保留 3 小时（hub 重启会清空）。';
+}
+window.addEventListener('resize', () => { if (batteryVisible()) drawBatteryChart(); });
+
 connect();
 requestAnimationFrame(draw);
+showTab(load('tab', 'drive') === 'battery' ? 'battery' : 'drive');

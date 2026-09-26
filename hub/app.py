@@ -18,7 +18,8 @@ import tornado.websocket
 
 from . import config, sysinfo
 from .arbiter import Arbiter
-from .battery import BatteryEstimator
+from .battery import BatteryEstimator, NMC_TABLE, WARN_V, CRITICAL_V, STOP_V, FLOOR_V, STORAGE_V
+from .battery_reader import BatteryReader
 from .camera import Camera
 from .sensors import SensorManager
 
@@ -39,6 +40,8 @@ class Hub(object):
         self.bridge = bridge_factory(loop, config.CMD_TOPIC, self._on_scan, self._on_odom,
                                      self._on_voltage)
         self.sensors = SensorManager(loop, self.bridge, self.camera, self.push_state)
+        self.voltage_source = None
+        self.sensors.reader = BatteryReader(loop, self._on_monitor_voltage)
         self.last_odom = None
         self._sys = sysinfo.snapshot()
         self._idle_since = None
@@ -129,8 +132,30 @@ class Hub(object):
         self.broadcast(payload)
 
     def _on_voltage(self, volts):
+        """From the chassis driver's /voltage (chassis on)."""
+        self.voltage_source = 'driver'
+        self._feed_battery(volts)
+
+    def _on_monitor_voltage(self, volts):
+        """From the battery monitor reading the STM32 directly (chassis off)."""
+        if self.sensors.sensors['base'].state in ('off', 'error'):
+            self.voltage_source = 'monitor'
+            self._feed_battery(volts)
+
+    def _feed_battery(self, volts):
         moving = any(abs(v) > 1e-3 for v in self.arbiter.output)
         self.battery.update(volts, time.time(), moving)
+
+    def battery_report(self):
+        now = time.time()
+        snap = self.battery.snapshot(now)
+        snap['source'] = self.voltage_source if snap['state'] != 'nodata' else None
+        return {'t': 'battery', 'stamp': round(now, 1), 'snapshot': snap,
+                'history': self.battery.history_points(),
+                'thresholds': {'warn': WARN_V, 'critical': CRITICAL_V, 'alarm': STOP_V,
+                               'floor': FLOOR_V, 'full': NMC_TABLE[-1][0],
+                               'storage': list(STORAGE_V)},
+                'table': NMC_TABLE}
 
     # ---- periodic ---------------------------------------------------------
     def _publish(self, vx, vy, wz):
@@ -151,7 +176,7 @@ class Hub(object):
             'sensors': self.sensors.snapshot(),
             'topics': self.bridge.topic_status(),
             'battery_v': self.bridge.voltage,
-            'battery': self.battery.snapshot(time.time()),
+            'battery': dict(self.battery.snapshot(time.time()), source=self.voltage_source),
             'clients': len(self.clients),
             'uptime': round(time.time() - self.started),
             'sys': self._sys,
@@ -205,6 +230,8 @@ class Hub(object):
         self.arbiter.trigger_estop('hub shutdown')
         self._publish(0.0, 0.0, 0.0)
         await self.sensors.stop_all()
+        if self.sensors.reader is not None:
+            await self.loop.run_in_executor(None, self.sensors.reader.stop)
         self.bridge.shutdown()
 
 
@@ -282,6 +309,16 @@ class StateHandler(tornado.web.RequestHandler):
         self.write(json.dumps(self.hub.state()))
 
 
+class BatteryHandler(tornado.web.RequestHandler):
+    def initialize(self, hub):
+        self.hub = hub
+
+    def get(self):
+        self.set_header('Content-Type', 'application/json')
+        self.set_header('Cache-Control', 'no-cache')
+        self.write(json.dumps(self.hub.battery_report()))
+
+
 class NoCacheStatic(tornado.web.StaticFileHandler):
     def set_extra_headers(self, path):
         self.set_header('Cache-Control', 'no-cache')
@@ -292,5 +329,6 @@ def make_app(hub):
         (r'/ws', PanelSocket, {'hub': hub}),
         (r'/camera.mjpg', MjpegHandler, {'hub': hub}),
         (r'/api/state', StateHandler, {'hub': hub}),
+        (r'/api/battery', BatteryHandler, {'hub': hub}),
         (r'/(.*)', NoCacheStatic, {'path': config.WEB_DIR, 'default_filename': 'index.html'}),
     ], websocket_ping_interval=5, websocket_ping_timeout=15)

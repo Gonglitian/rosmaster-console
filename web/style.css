@@ -83,9 +83,51 @@ main { display: grid; gap: 12px; padding: 12px 16px; grid-template-columns: minm
 
 footer { padding: 6px 16px 16px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+/* Tabs sit under the e-stop, inside the sticky header, so e-stop is on every tab. */
+.tabs { display: flex; gap: 8px; margin: 8px 16px 0; }
+.tabs button { flex: 1; padding: 8px; background: transparent; border-color: var(--line); color: var(--muted); }
+.tabs button.on { background: #222832; color: var(--text); border-color: var(--accent); }
+#battery { cursor: pointer; }
+
+/* Battery page */
+.battery-page { grid-template-columns: minmax(0, 1fr); }
+.battery-page .card { padding: 14px 16px; }
+.battery-page h3 { margin: 0 0 8px; font-size: 15px; }
+.battery-page h3 + .bat-eta { margin-bottom: 14px; }
+.bat-top { display: flex; align-items: center; gap: 16px; }
+.bat-big { font-size: 44px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+.bat-state { font-size: 16px; font-weight: 600; }
+.bat-sub { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bat-bar { position: relative; height: 22px; margin: 18px 0 4px; border-radius: 11px; background: #11151a;
+  border: 1px solid var(--line); overflow: visible; }
+.bat-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 11px; background: var(--ok); width: 0; }
+.bat-fill.warn { background: var(--warn); } .bat-fill.low { background: var(--bad); }
+.bat-band { position: absolute; top: -4px; bottom: -4px; border: 1px dashed #5a6472; border-radius: 6px; }
+.bat-now { position: absolute; top: -6px; bottom: -6px; width: 3px; margin-left: -1px; background: var(--text); border-radius: 2px; }
+.bat-tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: #6b7584; }
+.bat-tick.alarm { background: var(--bad); } .bat-tick.warn { background: var(--warn); }
+.bat-scale { position: relative; height: 48px; font-size: 11px; color: var(--muted); }
+.bat-scale span { position: absolute; transform: translateX(-50%); white-space: nowrap; text-align: center; line-height: 1.25; }
+.bat-scale span.edge-l { transform: none; } .bat-scale span.edge-r { transform: translateX(-100%); text-align: right; }
+.bat-eta { font-size: 14px; }
+.bat-eta b { font-variant-numeric: tabular-nums; }
+.bat-eta .muted { color: var(--muted); }
+.bat-inputs { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--muted); margin: 6px 0; }
+.bat-inputs input { width: 80px; font: inherit; color: var(--text); background: #11151a; border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 6px; }
+.note { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.bat-chart canvas { width: 100%; height: 220px; display: block; }
+.bat-details dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
+.bat-details dt { color: var(--muted); } .bat-details dd { margin: 0; font-variant-numeric: tabular-nums; }
+.bat-method ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); display: grid; gap: 6px; }
+@media (min-width: 900px) {
+  .battery-page { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .bat-hero, .bat-chart, .bat-method { grid-column: 1 / -1; }
+}
+
 /* Desktop: lidar view on the left, controls on the right. Keep last so it wins. */
 @media (min-width: 900px) {
-  main { grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); align-items: start;
+  #tab-drive { grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); align-items: start;
     grid-template-areas: "view sensors" "view camera" "view drive" "view ."; }
   .view { grid-area: view; aspect-ratio: auto; height: calc(100vh - 150px); max-height: none; }
   .camera { grid-area: camera; } .sensors-wrap { grid-area: sensors; } .drive { grid-area: drive; }

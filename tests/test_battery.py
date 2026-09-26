@@ -75,6 +75,43 @@ class BatteryTest(unittest.TestCase):
         t = feed(est2, 8.9, 0, 3)
         self.assertTrue(est2.below_floor(t))
 
+    def test_trend_needs_five_minutes(self):
+        est = BatteryEstimator()
+        t = feed(est, 11.1, 0, 120)
+        self.assertIsNone(est.trend(t))
+        self.assertIsNone(est.eta(t))
+
+    def test_drain_rate_and_eta(self):
+        est = BatteryEstimator()
+        t = 0.0
+        v = 11.10
+        for _ in range(20 * 60):              # 20 min, losing 0.3 V per hour
+            est.update(round(v, 2), t, False)
+            t += 1.0
+            v -= 0.3 / 3600.0
+        tr = est.trend(t)
+        self.assertAlmostEqual(tr['v_per_h'], -0.3, delta=0.08)
+        self.assertLess(tr['pct_per_h'], 0)
+        eta = est.eta(t)
+        self.assertEqual(eta['status'], 'discharging')
+        self.assertLess(eta['warn'], eta['critical'])
+        self.assertLess(eta['critical'], eta['alarm'])
+
+    def test_driving_points_excluded_from_trend(self):
+        est = BatteryEstimator()
+        t = feed(est, 11.1, 0, 400, hz=1.0)
+        t = feed(est, 10.4, t, 300, moving=True, hz=1.0)   # sag while driving
+        tr = est.trend(t)
+        self.assertTrue(tr is None or abs(tr['v_per_h']) < 0.2)
+
+    def test_history_and_snapshot_fields(self):
+        est = BatteryEstimator()
+        t = feed(est, 11.1, 0, 30)
+        snap = est.snapshot(t)
+        self.assertAlmostEqual(snap['cell_v'], 3.7, places=2)
+        self.assertEqual(snap['pct_exact'], 43.0)
+        self.assertGreater(len(est.history_points()), 3)
+
 
 if __name__ == '__main__':
     unittest.main()
