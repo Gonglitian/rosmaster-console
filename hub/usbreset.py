@@ -25,11 +25,13 @@ def usb_device_for(dev):
     return os.path.basename(path)
 
 
-def replug(dev, settle=1.5, wait=6.0):
+def replug(dev, settle=1.5, wait=6.0, while_unbound=None):
     name = usb_device_for(dev)
     log.warning('USB replug of %s (%s)', dev, name)
     with open('/sys/bus/usb/drivers/usb/unbind', 'w') as f:
         f.write(name)
+    if while_unbound is not None:
+        while_unbound()   # e.g. drop open handles while the device is gone (closing is instant)
     time.sleep(settle)
     with open('/sys/bus/usb/drivers/usb/bind', 'w') as f:
         f.write(name)

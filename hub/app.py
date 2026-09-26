@@ -83,14 +83,18 @@ class Hub(object):
         a = self.arbiter
         if kind == 'manual':
             before = a.mode
-            a.set_manual(msg.get('vx', 0), msg.get('vy', 0), msg.get('wz', 0), origin=cid)
+            if a.set_manual(msg.get('vx', 0), msg.get('vy', 0), msg.get('wz', 0), origin=cid):
+                # Act now instead of waiting up to 50 ms for the next control tick.
+                self._publish(*a.tick())
             if a.mode != before:
                 self.push_state()
             self.send(sock, {'t': 'ack', 'seq': msg.get('seq'), 's': time.time()})
         elif kind == 'manual_release':
             a.release_manual()
+            self._publish(*a.tick())
         elif kind == 'hand_back':
             a.hand_back()
+            self._publish(*a.tick())
             self.push_state()
         elif kind == 'estop':
             a.trigger_estop('client %s' % cid)

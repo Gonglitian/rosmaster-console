@@ -10,6 +10,7 @@ import os
 import time
 
 from . import config, usbreset
+from .devices import LidarMotor, allow_depth_sensor_suspend
 from .procs import ChildProcess
 
 log = logging.getLogger('hub.sensors')
@@ -44,8 +45,15 @@ class SensorManager(object):
         self.sensors = {n: Sensor(n) for n in ('base', 'lidar', 'camera')}
         self.procs = {}
         self.last_activity = time.time()
+        self.motor = LidarMotor()
 
     # ---- public -------------------------------------------------------
+    async def startup(self):
+        """Everything starts off, and 'off' means off: stop the lidar motor and let
+        the unused depth sensor suspend."""
+        await self._blocking(allow_depth_sensor_suspend)
+        await self._stop_motor(self.sensors['lidar'])
+
     def snapshot(self):
         return {n: s.snapshot() for n, s in self.sensors.items()}
 
@@ -92,6 +100,13 @@ class SensorManager(object):
             if proc is not None:
                 await self._blocking(proc.stop)
         self._set(s, OFF, attempt=0)
+        if s.name == 'lidar':
+            await self._stop_motor(s)
+
+    async def _stop_motor(self, s):
+        if not await self._blocking(self.motor.stop):
+            s.message = '驱动已关，但没能停住雷达电机（串口 DTR 设置失败）'
+            self.on_change()
 
     async def _clear_leftover(self, name):
         """A sensor restarted from the error state may still have a process."""
@@ -157,6 +172,10 @@ class SensorManager(object):
                 elif any(k in line for k in LIDAR_FAIL):
                     result.setdefault('fail', line)
 
+            # Let go of the port so the motor spins up before the node opens it and
+            # immediately asks for a scan.
+            await self._blocking(self.motor.release)
+            await asyncio.sleep(config.LIDAR_SPINUP)
             proc = self._launch('lidar', on_line)
             deadline = time.time() + config.LIDAR_START_TIMEOUT
             while time.time() < deadline and not result and proc.running:
@@ -177,12 +196,14 @@ class SensorManager(object):
             if attempt < config.LIDAR_MAX_ATTEMPTS:
                 self._set(s, STARTING, '第 %d 次失败（%s），USB 软拔插后重试' % (attempt, reason))
                 try:
-                    await self._blocking(usbreset.replug, '/dev/rplidar')
+                    await self._blocking(lambda: usbreset.replug('/dev/rplidar',
+                                                                 while_unbound=self.motor.forget))
                 except Exception as e:  # no /sys write access, device missing, ...
                     log.error('USB replug failed: %s', e)
                     self._set(s, STARTING, 'USB 软拔插失败：%s' % e)
                 await asyncio.sleep(1.0)
         self._set(s, ERROR, '%d 次都没启动成功：%s' % (config.LIDAR_MAX_ATTEMPTS, ' | '.join(last_lines)))
+        await self._stop_motor(s)
 
     async def _start_camera(self, s):
         if not os.path.exists(config.CAMERA_DEVICE):
@@ -223,6 +244,8 @@ class SensorManager(object):
             if proc is None or not proc.running:
                 self.procs.pop(name, None)
                 self._set(s, ERROR, '进程意外退出：' + ' | '.join(proc.tail(3) if proc else []))
+                if name == 'lidar':
+                    self.loop.create_task(self._stop_motor(s))
                 continue
             age = now - self.bridge.rates[topic].last
             if age > config.STALE_TOPIC_TIMEOUT:

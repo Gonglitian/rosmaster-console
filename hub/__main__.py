@@ -17,6 +17,7 @@ def main():
     hub = Hub(loop, RosBridge)
     hub.bridge.start()
     make_app(hub).listen(config.PORT)
+    loop.create_task(hub.sensors.startup())
     loop.create_task(hub.control_loop())
     loop.create_task(hub.state_loop())
     log.info('hub listening on :%d (web dir %s)', config.PORT, config.WEB_DIR)

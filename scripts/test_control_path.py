@@ -92,7 +92,8 @@ async def main():
         print('%s  %-34s %s' % ('PASS' if cond else 'FAIL', name, detail))
 
     rate = len(window(t0, 0.0, 5.0)) / 5.0
-    check('publish rate ~20 Hz', 17 <= rate <= 23, '%.1f Hz' % rate)
+    # 20 Hz periodic, plus an immediate publish for each manual command (10 Hz here).
+    check('publish rate >= 20 Hz', 18 <= rate <= 40, '%.1f Hz' % rate)
     ramp = window(t0, 0.0, 0.3)
     first = next((s for s in ramp if s[1] > 0), None)
     steps = [b[1] - a[1] for a, b in zip(ramp, ramp[1:])]

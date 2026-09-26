@@ -64,7 +64,7 @@ function renderState() {
     let text = SENSOR_TEXT[s.state] || s.state;
     if (s.state === 'starting' && s.attempt > 1) text += '·' + s.attempt;
     btn.querySelector('span').textContent = text;
-    if (s.message && (s.state === 'error' || s.state === 'starting' || s.state === 'on')) {
+    if (s.message && s.state !== 'stopping') {
       msg += btn.querySelector('b').textContent + '：' + s.message + '  ';
       bad = bad || s.state === 'error';
     }
@@ -168,19 +168,22 @@ function makePad(el, horizontalOnly, onMove) {
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
 }
-makePad($('pad-move'), false, (dx, dy, on) => { S.input.move = [dx, dy]; S.input.padMove = on; });
-makePad($('pad-rot'), true, (dx, dy, on) => { S.input.rot = dx; S.input.padRot = on; });
+makePad($('pad-move'), false, (dx, dy, on) => { S.input.move = [dx, dy]; S.input.padMove = on; pushManual(); });
+makePad($('pad-rot'), true, (dx, dy, on) => { S.input.rot = dx; S.input.padRot = on; pushManual(); });
 
 const KEYS = ['w', 'a', 's', 'd', 'q', 'e'];
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
   if (k === 'escape') { send({ t: 'estop' }); return; }
-  if (KEYS.includes(k)) { S.input.keys.add(k); e.preventDefault(); }
+  if (KEYS.includes(k)) {
+    e.preventDefault();
+    if (!S.input.keys.has(k)) { S.input.keys.add(k); pushManual(); }
+  }
 });
-document.addEventListener('keyup', (e) => S.input.keys.delete(e.key.toLowerCase()));
-window.addEventListener('blur', () => S.input.keys.clear());
-document.addEventListener('visibilitychange', () => { if (document.hidden) S.input.keys.clear(); });
+document.addEventListener('keyup', (e) => { if (S.input.keys.delete(e.key.toLowerCase())) pushManual(); });
+window.addEventListener('blur', () => { S.input.keys.clear(); pushManual(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { S.input.keys.clear(); pushManual(); } });
 
 function manualCommand() {
   const I = S.input, vmax = +$('vmax').value, wmax = +$('wmax').value;
@@ -190,13 +193,36 @@ function manualCommand() {
   const fw = Math.max(-1, Math.min(1, -I.rot + k('q', 'e')));
   return { vx: fx * vmax, vy: fy * vmax, wz: fw * wmax };
 }
-setInterval(() => {
+// Send as soon as the input changes (at most one command per 40 ms while dragging),
+// plus a keep-alive every 100 ms while held: the hub stops after 0.5 s of silence.
+// Letting go is sent at once, never throttled.
+const SEND_MIN_GAP = 40, KEEPALIVE = 100;
+let lastSend = 0, pendingSend = null;
+function isDriving() {
   const I = S.input;
-  const driving = !document.hidden && (I.padMove || I.padRot || I.keys.size > 0);
+  return !document.hidden && (I.padMove || I.padRot || I.keys.size > 0);
+}
+function flushManual() {
+  const driving = isDriving();
   if (driving) send(Object.assign({ t: 'manual', seq: ++S.seq }, manualCommand()));
   else if (S.wasDriving) send({ t: 'manual_release' });
+  if (driving || S.wasDriving) lastSend = performance.now();
   S.wasDriving = driving;
-}, 100);
+}
+function pushManual() {
+  if (!isDriving()) {
+    if (pendingSend) { clearTimeout(pendingSend); pendingSend = null; }
+    flushManual();
+    return;
+  }
+  if (pendingSend) return;
+  const wait = SEND_MIN_GAP - (performance.now() - lastSend);
+  if (wait <= 0) { flushManual(); return; }
+  pendingSend = setTimeout(() => { pendingSend = null; flushManual(); }, wait);
+}
+setInterval(() => {
+  if ((isDriving() || S.wasDriving) && performance.now() - lastSend >= KEEPALIVE) flushManual();
+}, 20);
 
 // ---------- top-down view ----------
 const canvas = $('topdown'), ctx = canvas.getContext('2d');

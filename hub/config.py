@@ -28,6 +28,7 @@ MAX_ANGULAR_ACCEL = _env('MAX_ANGULAR_ACCEL', 4.0)  # rad/s^2
 # Sensors
 LIDAR_START_TIMEOUT = _env('LIDAR_START_TIMEOUT', 12.0)
 LIDAR_MAX_ATTEMPTS = _env('LIDAR_MAX_ATTEMPTS', 3, int)
+LIDAR_SPINUP = _env('LIDAR_SPINUP', 1.5)   # s of motor spin-up before sllidar_node starts
 BASE_START_TIMEOUT = _env('BASE_START_TIMEOUT', 15.0)
 STALE_TOPIC_TIMEOUT = _env('STALE_TOPIC_TIMEOUT', 5.0)
 # Stop all sensors after this long with no panel connected and no active policy.
